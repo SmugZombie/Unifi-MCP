@@ -164,6 +164,11 @@ export class LegacyApiClient {
     return this.stamgr("kick-sta", mac);
   }
 
+  /** Update fields of a known client record (rest/user), e.g. its network override or speed group. */
+  updateClient(userId: string, body: Record<string, unknown>) {
+    return this.request(`/rest/user/${encodeURIComponent(userId)}`, { method: "PUT", body });
+  }
+
   /** Set the display name / note of a known client. */
   async setClientAlias(mac: string, name?: string, note?: string) {
     const client = (await this.knownClients()).find((c) => c.mac === normalizeMac(mac));

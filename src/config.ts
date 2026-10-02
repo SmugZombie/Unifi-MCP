@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export interface Config {
   /** Base URL of the UniFi console, e.g. https://192.168.1.1 */
@@ -21,6 +21,10 @@ export interface Config {
   /** JSON file holding scheduled undo actions (timed blocks). */
   stateFile: string;
   schedulerIntervalMs: number;
+  /** JSON file holding device profiles and recent watcher events. */
+  profilesFile: string;
+  /** How often the device-profile watcher checks connected clients. */
+  watchIntervalMs: number;
 }
 
 export type TransportConfig =
@@ -72,6 +76,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const auditLog =
     auditEnv === undefined ? join(homedir(), ".unifi-mcp", "audit.log") : ["", "off", "false", "0"].includes(auditEnv) ? undefined : auditEnv;
 
+  const stateFile = env.UNIFI_STATE_FILE || join(homedir(), ".unifi-mcp", "scheduled.json");
+
   return {
     host,
     apiKey,
@@ -84,7 +90,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     auditLog,
     timeoutMs: Number(env.UNIFI_TIMEOUT_MS) || 15000,
     transport: loadTransport(env),
-    stateFile: env.UNIFI_STATE_FILE || join(homedir(), ".unifi-mcp", "scheduled.json"),
+    stateFile,
     schedulerIntervalMs: Number(env.UNIFI_SCHEDULER_INTERVAL_MS) || 30_000,
+    profilesFile: env.UNIFI_PROFILES_FILE || join(dirname(stateFile), "profiles.json"),
+    watchIntervalMs: Number(env.UNIFI_WATCH_INTERVAL_MS) || 5 * 60_000,
   };
 }
