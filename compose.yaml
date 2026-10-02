@@ -1,0 +1,29 @@
+services:
+  unifi-mcp:
+    build: .
+    image: unifi-mcp:latest
+    container_name: unifi-mcp
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "3000"
+      UNIFI_AUDIT_LOG: /data/audit.log
+    ports:
+      # Only reachable from this machine by default. Set MCP_PUBLISH=3000 in .env to expose on the LAN.
+      - "${MCP_PUBLISH:-127.0.0.1:3000}:3000"
+    volumes:
+      - unifi-mcp-data:/data
+      # Uncomment to verify the console's certificate (and set UNIFI_CA_CERT=/certs/unifi.pem):
+      # - ./certs/unifi.pem:/certs/unifi.pem:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  unifi-mcp-data:
