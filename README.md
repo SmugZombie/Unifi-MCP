@@ -1,24 +1,62 @@
-# unifi-mcp
+# UniFi MCP
 
-An [MCP](https://modelcontextprotocol.io) server for UniFi Network. It lets Claude or another agent answer questions about your network ("what's connected to the IoT VLAN?", "which APs need firmware updates?") and make changes ("block that unknown Espressif device", "stop the cameras from reaching the internet").
+[![CI](https://github.com/SmugZombie/Unifi-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/SmugZombie/Unifi-MCP/actions/workflows/ci.yml)
 
-Built and tested against the **UniFi Network 10.6.106** API with UniFi OS 5.x. It uses the zone-based firewall.
+**Run your UniFi network by asking.** UniFi MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that connects Claude and other AI agents to your UniFi console. Ask what's on your network, find a device you don't recognise, block it, or write a firewall rule, all in plain language. You approve every change.
 
-## How it talks to UniFi
+📖 **Project site:** https://smugzombie.github.io/Unifi-MCP/
+
+Built and tested against the **UniFi Network 10.6.106** API on UniFi OS 5.x, using the zone-based firewall.
+
+> **You:** There's something called `ESP_3A1F2C` on the network. What is it, and can you keep it off the internet without kicking it off Wi-Fi?
+>
+> **Claude:** *(calls `unifi_list_clients`)* It's an Espressif chip, typical of smart plugs and sensors, on the IoT network. Here's a dry run of a policy that blocks just that device from the internet *(calls `unifi_create_firewall_policy` with `dryRun: true`)*. Shall I apply it?
+
+## Why it matters
+
+Home and small-office networks keep growing: dozens of phones, TVs, cameras and smart plugs, split across VLANs and guarded by firewall rules that few people want to edit by hand. The UniFi controller is powerful, but answering a simple question can mean five screens and a MAC address lookup.
+
+- **Questions, not menus.** "Which devices are offline?" "What's on the guest network?" Get answers directly instead of clicking through dashboards.
+- **Faster response.** When an unknown device appears, find it, identify the vendor and block it in one conversation.
+- **Firewall rules you can read.** Zone-based policies are deeply nested JSON. The agent writes them from a plain description and shows a readable dry run before applying anything.
+- **Local and private.** The server talks directly to your console on your LAN. No cloud account or third-party service is involved.
+- **An open standard.** MCP works with Claude Code, Claude Desktop and a growing list of agents, so any MCP client can use your network as a tool.
+- **You stay in control.** Every write needs your approval, every change is logged, and read-only mode removes write tools entirely.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["AI client<br/>Claude Code, Claude Desktop,<br/>other MCP agents"] -- "tool call (MCP over stdio or HTTP)" --> S["UniFi MCP server<br/>22 tools · name→ID resolution<br/>policy builder · dry runs · audit log"]
+    S -- result --> A
+    S -- "API key" --> O["Official Network API<br/>/proxy/network/integration/v1"]
+    S -- "API key or local login" --> I["Internal API<br/>/proxy/network/api/s/{site}"]
+    subgraph Console["UniFi console (UDM, UCG, Cloud Key…)"]
+        O
+        I
+    end
+```
+
+1. **You ask** a question or request a change. The AI client sees the tool list and their descriptions, and picks which tools to call.
+2. **The agent gathers context**: it looks up clients by name to get MAC addresses, and lists zones and networks so names like "IoT" resolve to the right IDs.
+3. **It proposes the change as a dry run.** The server builds the exact API request from simple fields (zones, MACs, ports, schedule) and returns a readable summary without sending anything.
+4. **You approve, and the server applies it.** The result comes back in plain terms, and the change is appended to the audit log.
+
+### Two UniFi APIs, one interface
 
 | Capability | API used | Auth |
 |---|---|---|
-| Devices, networks, WiFi, firewall zones and policies, ordering, device restart, PoE power-cycle | Official Network API (`/proxy/network/integration/v1`) | API key |
+| Devices, networks, Wi-Fi, firewall zones and policies, ordering, device restart, PoE power-cycle | Official Network API (`/proxy/network/integration/v1`) | API key |
 | Client search including offline clients, block, unblock, reconnect, rename | Internal API (`/proxy/network/api/s/<site>`) | API key, falling back to local admin login |
 
-The official API has no "block client" action, so blocking goes through the internal API. Some consoles accept the API key there and some don't. If yours doesn't, set `UNIFI_USERNAME`/`UNIFI_PASSWORD` and the server logs in with them automatically when the key is rejected.
+The official API has no "block client" action, so blocking goes through the internal API. Many consoles accept the API key there too. If yours doesn't, set `UNIFI_USERNAME`/`UNIFI_PASSWORD` and the server logs in with them automatically when the key is rejected.
 
 The OpenAPI spec for 10.6.106 is in [`docs/`](docs/unifi-network-api-10.6.106.yaml).
 
 ## Setup
 
 1. **Create an API key**: UniFi Network → Settings → Control Plane → Integrations → *Create API Key*.
-2. **(Recommended) Create a local admin** for blocking: UniFi OS → Admins & Users → add an admin with *Restrict to local access only*, Network role *Site Admin*. Don't use your Ubiquiti cloud account; MFA will break login.
+2. **(Only if needed) Create a local admin** for blocking. Skip this if `npm run check` passes the internal-API step with just the key. Otherwise: UniFi OS → Admins & Users → add an admin with *Restrict to local access only*, Network role *Site Admin*. Don't use your Ubiquiti cloud account; MFA will break login.
 3. Build and check the connection:
 
 ```sh
@@ -153,6 +191,28 @@ Firewall tools accept **zone and network names** ("IoT", "External") as well as 
 - `UNIFI_READ_ONLY=true` leaves out every write tool.
 - Policy order matters (first match wins per zone pair). Use `position: "top"` when a new BLOCK must beat an existing ALLOW.
 
+## Troubleshooting
+
+**The Docker container can't reach the console, but my computer can.** A Docker network probably overlaps your LAN. Once Docker runs out of `172.x` ranges it hands out `192.168.x.0/20` networks, and one of them can cover your console's address (for example `192.168.0.0/20` contains `192.168.1.1`). List the subnets:
+
+```sh
+for n in $(docker network ls -q); do
+  docker network inspect -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' $n
+done
+```
+
+Fix it by setting `default-address-pools` in Docker's daemon settings to a range clear of your LAN and recreating the overlapping network, or run the server with Node instead.
+
+**TLS errors.** Consoles use a self-signed certificate. Set `UNIFI_CA_CERT` to the exported certificate, or `UNIFI_VERIFY_TLS=false` on a trusted network.
+
+**Blocking fails with "rejected (HTTP 401/403)".** Your console doesn't accept the API key on the internal API. Add a local-only admin as `UNIFI_USERNAME`/`UNIFI_PASSWORD`.
+
+**A new block rule has no effect.** Policies are evaluated per source→destination zone pair, and the first match wins. Create it with `position: "top"` or move it with `unifi_move_firewall_policy`.
+
+**Write tools are missing.** `UNIFI_READ_ONLY=true` removes them. Set it to `false` and restart the server.
+
+**Block a client or write a firewall policy?** Blocking removes the device from the whole network. A firewall policy matching its MAC restricts only some traffic (for example internet access at night) while it stays connected.
+
 ## Configuration reference
 
 All settings are environment variables; see [`.env.example`](.env.example). `MCP_TRANSPORT` is `stdio` (default when run with Node) or `http` (default in the Docker image), with `MCP_HOST`, `MCP_PORT`, `MCP_AUTH_TOKEN` and `MCP_ALLOWED_ORIGINS` applying to HTTP.
@@ -163,3 +223,13 @@ All settings are environment variables; see [`.env.example`](.env.example). `MCP
 npm run dev        # run from source with tsx
 npm test           # builder unit tests + end-to-end tests (stdio and HTTP) against a fake console
 ```
+
+The project site is a single static page in [`site/`](site/index.html), deployed to GitHub Pages by [`.github/workflows/pages.yml`](.github/workflows/pages.yml) whenever `site/` changes on `main`. Preview it locally with:
+
+```sh
+open site/index.html
+```
+
+---
+
+An independent project, not affiliated with or endorsed by Ubiquiti Inc. UniFi is a trademark of Ubiquiti Inc.

@@ -5,3 +5,4 @@ docs
 .env
 .git
 *.log
+site

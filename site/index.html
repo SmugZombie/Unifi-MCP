@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UniFi MCP</title>
+<meta name="description" content="An MCP server that lets Claude and other AI agents query and manage a UniFi network in plain language: devices, clients, zone-based firewall policies and client blocking.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M9 10v7a7 7 0 0 0 14 0v-7' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f5f7fb;
+  --surface: #ffffff;
+  --border: #e3e8f0;
+  --text: #0f172a;
+  --muted: #526077;
+  --accent: #2563eb;
+  --accent-soft: #e8efff;
+  --ok: #15803d;
+  --warn: #b45309;
+  --code-bg: #0f172a;
+  --code-text: #e2e8f0;
+  --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 4px 16px rgba(15, 23, 42, .06);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1020;
+    --bg-soft: #11182b;
+    --surface: #141c31;
+    --border: #243049;
+    --text: #e6ebf5;
+    --muted: #9aa7bf;
+    --accent: #6d9eff;
+    --accent-soft: #1a2747;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --code-bg: #070b16;
+    --code-text: #dbe4f3;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 16px rgba(0, 0, 0, .25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b1020;
+  --bg-soft: #11182b;
+  --surface: #141c31;
+  --border: #243049;
+  --text: #e6ebf5;
+  --muted: #9aa7bf;
+  --accent: #6d9eff;
+  --accent-soft: #1a2747;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --code-bg: #070b16;
+  --code-text: #dbe4f3;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 16px rgba(0, 0, 0, .25);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+:not(pre) > code { background: var(--accent-soft); padding: .1em .35em; border-radius: 5px; overflow-wrap: anywhere; }
+
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 16px; }
+
+/* Nav */
+header.nav {
+  position: sticky; top: 0; z-index: 10;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+header.nav .wrap { display: flex; align-items: center; gap: 20px; height: 58px; }
+.brand { font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 9px; }
+.brand:hover { text-decoration: none; }
+.brand svg { width: 26px; height: 26px; }
+nav.links { display: flex; gap: 18px; margin-left: auto; font-size: .93rem; }
+nav.links a { color: var(--muted); }
+nav.links a:hover { color: var(--text); text-decoration: none; }
+.theme-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  width: 34px; height: 34px; border-radius: 8px; cursor: pointer; display: grid; place-items: center;
+}
+@media (max-width: 760px) { nav.links { display: none; } .theme-btn { margin-left: auto; } }
+
+/* Hero */
+.hero { padding: 72px 0 56px; background: radial-gradient(1200px 400px at 50% -120px, var(--accent-soft), transparent); }
+.eyebrow { display: inline-block; font-size: .8rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); padding: 4px 10px; border-radius: 999px; }
+.hero h1 { font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.12; margin: 18px 0 16px; letter-spacing: -.02em; max-width: 820px; }
+.hero p.lead { font-size: 1.15rem; color: var(--muted); max-width: 700px; margin: 0 0 28px; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 10px; font-weight: 600; border: 1px solid var(--border); color: var(--text); background: var(--surface); }
+.btn:hover { text-decoration: none; border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); }
+
+/* Chat demo */
+.chat { margin-top: 44px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 20px; max-width: 760px; }
+.msg { display: flex; gap: 12px; margin: 0 0 16px; }
+.msg:last-child { margin-bottom: 0; }
+.avatar { flex: 0 0 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-size: .8rem; font-weight: 700; color: #fff; }
+.avatar.you { background: #64748b; }
+.avatar.ai { background: var(--accent); }
+.bubble { min-width: 0; }
+.bubble p { margin: 3px 0 6px; }
+.toolcall { font-family: ui-monospace, Menlo, monospace; font-size: .8rem; color: var(--muted); background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin: 6px 0; overflow-wrap: anywhere; }
+.toolcall b { color: var(--accent); font-weight: 600; }
+
+/* Sections */
+section { padding: 64px 0; }
+section.alt { background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+h2 { font-size: clamp(1.5rem, 3vw, 2rem); letter-spacing: -.01em; margin: 0 0 10px; }
+.section-lead { color: var(--muted); max-width: 720px; margin: 0 0 32px; font-size: 1.05rem; }
+h3 { font-size: 1.08rem; margin: 0 0 6px; }
+
+.grid { display: grid; gap: 18px; }
+.grid.c3 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.grid.c2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+@media (max-width: 400px) { .grid.c2, .grid.c3 { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.card p { margin: 0; color: var(--muted); }
+.card .icon { width: 36px; height: 36px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin-bottom: 12px; }
+.card .icon svg { width: 20px; height: 20px; }
+
+/* Diagram */
+.diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; overflow-x: auto; }
+.diagram svg { display: block; width: 100%; min-width: 640px; height: auto; }
+.d-box { fill: var(--bg-soft); stroke: var(--border); stroke-width: 1.5; }
+.d-box.hl { fill: var(--accent-soft); stroke: var(--accent); }
+.d-title { fill: var(--text); font: 600 15px ui-sans-serif, system-ui, sans-serif; }
+.d-sub { fill: var(--muted); font: 12.5px ui-sans-serif, system-ui, sans-serif; }
+.d-line { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+.d-arrow { fill: var(--muted); }
+.d-label { fill: var(--muted); font: 12px ui-monospace, Menlo, monospace; }
+
+.steps { counter-reset: step; list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 14px; }
+.steps li { counter-increment: step; position: relative; padding: 14px 16px 14px 56px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.steps li::before { content: counter(step); position: absolute; left: 16px; top: 14px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: .85rem; display: grid; place-items: center; }
+.steps li p { margin: 2px 0 0; color: var(--muted); }
+
+/* Tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: var(--bg-soft); }
+tr:last-child td { border-bottom: 0; }
+td code { white-space: nowrap; }
+.tag { display: inline-block; font-size: .72rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.tag.read { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.tag.write { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+
+/* Code + tabs */
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: -1px; }
+.tab { border: 1px solid var(--border); border-bottom: 0; background: var(--bg-soft); color: var(--muted); padding: 8px 14px; border-radius: 10px 10px 0 0; cursor: pointer; font: inherit; font-size: .9rem; font-weight: 600; }
+.tab[aria-selected="true"] { background: var(--surface); color: var(--text); }
+.panel { border: 1px solid var(--border); border-radius: 0 12px 12px 12px; background: var(--surface); padding: 20px; }
+.panel[hidden] { display: none; }
+.panel p { margin: 0 0 12px; color: var(--muted); }
+.code { position: relative; margin: 0 0 16px; }
+.code:last-child { margin-bottom: 0; }
+.code pre { margin: 0; background: var(--code-bg); color: var(--code-text); padding: 14px 16px; border-radius: 10px; overflow-x: auto; line-height: 1.55; }
+.copy { position: absolute; top: 8px; right: 8px; font: 600 .75rem ui-sans-serif, system-ui, sans-serif; color: #cbd5e1; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15); border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+.copy:hover { background: rgba(255,255,255,.16); }
+
+.callout { border-left: 4px solid var(--warn); background: color-mix(in srgb, var(--warn) 9%, var(--surface)); padding: 14px 16px; border-radius: 0 10px 10px 0; margin-top: 20px; }
+.callout p { margin: 0; }
+
+/* FAQ */
+details { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px; margin-bottom: 10px; }
+summary { cursor: pointer; font-weight: 600; }
+details p, details ul { color: var(--muted); margin: 10px 0 0; }
+
+.prompts { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.prompt { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: .95rem; }
+.prompt::before { content: "“"; color: var(--accent); font-weight: 700; margin-right: 2px; }
+.prompt::after { content: "”"; color: var(--accent); font-weight: 700; margin-left: 1px; }
+
+footer { padding: 36px 0 48px; color: var(--muted); font-size: .88rem; border-top: 1px solid var(--border); }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="UniFi MCP home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#2563eb"/><path d="M9 10v7a7 7 0 0 0 14 0v-7" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/></svg>
+      UniFi MCP
+    </a>
+    <nav class="links" aria-label="Sections">
+      <a href="#why">Why</a>
+      <a href="#how">How it works</a>
+      <a href="#tools">Tools</a>
+      <a href="#safety">Safety</a>
+      <a href="#start">Get started</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/SmugZombie/Unifi-MCP">GitHub</a>
+    </nav>
+    <button class="theme-btn" id="theme" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+  <div class="hero">
+    <div class="wrap">
+      <span class="eyebrow">Model Context Protocol server</span>
+      <h1>Run your UniFi network by asking.</h1>
+      <p class="lead">UniFi MCP connects Claude and other AI agents to your UniFi console. Ask what's on your network, find a device you don't recognise, block it, or write a firewall rule, all in plain language. You approve every change.</p>
+      <div class="cta">
+        <a class="btn primary" href="#start">Get started</a>
+        <a class="btn" href="https://github.com/SmugZombie/Unifi-MCP">View on GitHub</a>
+      </div>
+
+      <div class="chat" aria-label="Example conversation">
+        <div class="msg">
+          <div class="avatar you" aria-hidden="true">You</div>
+          <div class="bubble"><p>There's something called <code>ESP_3A1F2C</code> on the network. What is it, and can you keep it off the internet without kicking it off Wi-Fi?</p></div>
+        </div>
+        <div class="msg">
+          <div class="avatar ai" aria-hidden="true">AI</div>
+          <div class="bubble">
+            <div class="toolcall"><b>unifi_list_clients</b> search="ESP_3A1F2C" status="all"</div>
+            <p>It's an Espressif chip (typical of smart plugs and sensors) on the IoT network at 10.0.30.41, first seen yesterday. I'll create a policy that blocks just that device from reaching the internet. Here's the dry run:</p>
+            <div class="toolcall"><b>unifi_create_firewall_policy</b> action=BLOCK sourceZone="Internal" source.macs=["a4:cf:12:3a:1f:2c"] destinationZone="External" position="top" dryRun=true</div>
+            <p>Shall I apply it?</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section id="why" class="alt">
+    <div class="wrap">
+      <h2>Why it matters</h2>
+      <p class="section-lead">Home and small-office networks keep growing: dozens of phones, TVs, cameras and smart plugs, split across VLANs and guarded by firewall rules that few people want to edit by hand. UniFi's controller is powerful, but answering a simple question can mean five screens and a MAC address lookup.</p>
+      <div class="grid c3">
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+          <h3>Questions, not menus</h3>
+          <p>"Which devices are offline?" "What's on the guest network?" "Is anything talking to the cameras VLAN from outside?" Get the answer directly instead of clicking through dashboards.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+          <h3>Faster response</h3>
+          <p>When an unknown device shows up, you can find it, identify the vendor and block it in one conversation. That beats hunting for a MAC address on your phone at midnight.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+          <h3>Firewall rules you can read</h3>
+          <p>Zone-based firewall policies are deeply nested JSON. The agent writes them from a plain description, shows a readable dry run first, and keeps an audit log of every change.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg></div>
+          <h3>Local and private</h3>
+          <p>The server talks directly to your console on your LAN. It needs no cloud account or third-party service, and your network data goes only to the AI client you choose.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></svg></div>
+          <h3>An open standard</h3>
+          <p>MCP is supported by Claude Code, Claude Desktop and a growing list of agents. Build once and any MCP client can use your network as a tool.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+          <h3>You stay in control</h3>
+          <p>Write tools are flagged as destructive, so your client asks before each one runs. Turn on read-only mode and the agent can look but never touch.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <h2>How it works</h2>
+      <p class="section-lead"><a href="https://modelcontextprotocol.io">The Model Context Protocol</a> is a standard way for AI applications to call external tools. UniFi MCP is a small Node.js server that exposes your network as a set of well-described tools, and translates each tool call into requests to your UniFi console.</p>
+
+      <div class="diagram" role="img" aria-label="Architecture: an AI client connects over MCP (stdio or HTTP) to the UniFi MCP server, which calls the official UniFi Network API with an API key and the internal API for client blocking, both on the UniFi console.">
+        <svg viewBox="0 0 900 330" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-arrow" d="M0 0L10 5L0 10z"/></marker>
+          </defs>
+          <!-- Client -->
+          <rect class="d-box" x="10" y="110" width="190" height="110" rx="12"/>
+          <text class="d-title" x="105" y="152" text-anchor="middle">AI client</text>
+          <text class="d-sub" x="105" y="174" text-anchor="middle">Claude Code, Claude</text>
+          <text class="d-sub" x="105" y="191" text-anchor="middle">Desktop, other agents</text>
+
+          <!-- Server -->
+          <rect class="d-box hl" x="320" y="70" width="230" height="190" rx="12"/>
+          <text class="d-title" x="435" y="104" text-anchor="middle">UniFi MCP server</text>
+          <text class="d-sub" x="435" y="132" text-anchor="middle">22 tools with schemas</text>
+          <text class="d-sub" x="435" y="152" text-anchor="middle">Name → ID resolution</text>
+          <text class="d-sub" x="435" y="172" text-anchor="middle">Firewall policy builder</text>
+          <text class="d-sub" x="435" y="192" text-anchor="middle">Dry runs and guard rails</text>
+          <text class="d-sub" x="435" y="212" text-anchor="middle">Audit log</text>
+          <text class="d-sub" x="435" y="240" text-anchor="middle">Node.js or Docker</text>
+
+          <!-- Console -->
+          <rect class="d-box" x="680" y="40" width="210" height="250" rx="12"/>
+          <text class="d-title" x="785" y="72" text-anchor="middle">UniFi console</text>
+          <text class="d-sub" x="785" y="92" text-anchor="middle">UDM, UCG, Cloud Key…</text>
+          <rect class="d-box" x="700" y="110" width="170" height="70" rx="9"/>
+          <text class="d-title" x="785" y="138" text-anchor="middle" style="font-size:13.5px">Official API</text>
+          <text class="d-sub" x="785" y="158" text-anchor="middle">/integration/v1</text>
+          <rect class="d-box" x="700" y="198" width="170" height="70" rx="9"/>
+          <text class="d-title" x="785" y="226" text-anchor="middle" style="font-size:13.5px">Internal API</text>
+          <text class="d-sub" x="785" y="246" text-anchor="middle">/api/s/&lt;site&gt;</text>
+
+          <!-- Links -->
+          <path class="d-line" d="M200 150 H316" marker-end="url(#arr)"/>
+          <path class="d-line" d="M320 182 H204" marker-end="url(#arr)"/>
+          <text class="d-label" x="260" y="140" text-anchor="middle">tool call</text>
+          <text class="d-label" x="260" y="202" text-anchor="middle">result</text>
+          <text class="d-label" x="260" y="250" text-anchor="middle">MCP over</text>
+          <text class="d-label" x="260" y="266" text-anchor="middle">stdio / HTTP</text>
+
+          <path class="d-line" d="M550 135 H696" marker-end="url(#arr)"/>
+          <text class="d-label" x="623" y="125" text-anchor="middle">API key</text>
+          <path class="d-line" d="M550 222 H696" marker-end="url(#arr)"/>
+          <text class="d-label" x="623" y="212" text-anchor="middle">key or login</text>
+        </svg>
+      </div>
+
+      <ol class="steps">
+        <li><strong>You ask a question or request a change.</strong><p>"Block the TV from the internet after 10pm." The AI client sees the tool list and their descriptions, and decides which tools to call.</p></li>
+        <li><strong>The agent gathers context first.</strong><p>It looks up the client by name to get its MAC, and lists zones and networks so names like "IoT" resolve to the right IDs.</p></li>
+        <li><strong>It proposes the change as a dry run.</strong><p>The server builds the exact API request from simple fields (zones, MACs, ports, schedule) and returns a readable summary without sending anything.</p></li>
+        <li><strong>You approve, and the server applies it.</strong><p>The request goes to your console, the result comes back in plain terms, and the change is appended to the audit log.</p></li>
+      </ol>
+
+      <h3 style="margin-top:40px">Two UniFi APIs, one interface</h3>
+      <p class="section-lead" style="margin-bottom:18px">UniFi Network 10.x has an official API that covers most things but cannot block clients, so the server uses both and hides the difference.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Capability</th><th>API</th><th>Auth</th></tr></thead>
+          <tbody>
+            <tr><td>Devices, networks, Wi-Fi, firewall zones and policies, policy ordering, device restart, PoE power-cycle</td><td>Official Network API<br><code>/proxy/network/integration/v1</code></td><td>API key</td></tr>
+            <tr><td>Client search including offline clients, block, unblock, reconnect, rename</td><td>Internal API<br><code>/proxy/network/api/s/&lt;site&gt;</code></td><td>API key, with automatic fallback to a local admin login</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tools" class="alt">
+    <div class="wrap">
+      <h2>Tools</h2>
+      <p class="section-lead">Each tool has a typed input schema and a description written for the agent. Firewall tools accept zone and network <em>names</em> as well as IDs.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tool</th><th>What it does</th><th>Type</th></tr></thead>
+          <tbody>
+            <tr><td><code>unifi_get_overview</code></td><td>Version, site, device health, client count, WANs</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_list_devices</code> / <code>unifi_get_device</code></td><td>Gateways, switches and APs with live statistics</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_list_clients</code></td><td>Connected, all or blocked clients; search by name, vendor, IP or partial MAC</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_list_networks</code> / <code>unifi_list_wifi</code></td><td>VLANs, subnets and SSIDs</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_list_firewall_zones</code></td><td>Zones and the networks in each</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_list_firewall_policies</code> / <code>unifi_get_firewall_policy</code></td><td>Policies with human-readable source, destination, protocol and action</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_get_firewall_policy_order</code></td><td>Evaluation order for a zone pair (first match wins)</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_api_get</code></td><td>Read-only access to any other endpoint</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_block_client</code> / <code>unifi_unblock_client</code></td><td>Block a device from the whole network, or let it back on</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_reconnect_client</code> / <code>unifi_rename_client</code></td><td>Force a reconnect; set a friendly name or note</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_create_firewall_policy</code></td><td>New policy from simple fields (IPs, CIDRs, networks, MACs, domains, countries, ports, protocol, schedule) or raw JSON; dry run supported</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_update_firewall_policy</code></td><td>Change only the fields you name; dry run shows before and after</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_set_firewall_policy_enabled</code> / <code>unifi_delete_firewall_policy</code></td><td>Toggle or remove a policy (deletes return a restorable copy)</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_move_firewall_policy</code></td><td>Reorder: top, bottom, or before/after another policy</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_restart_device</code> / <code>unifi_power_cycle_port</code></td><td>Reboot a device or power-cycle a PoE port</td><td><span class="tag write">write</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 style="margin-top:36px">Things to try</h3>
+      <div class="prompts" style="margin-top:12px">
+        <div class="prompt">What's on my network right now that I don't recognise?</div>
+        <div class="prompt">Which APs or switches need a firmware update?</div>
+        <div class="prompt">Block the device called ESP_3A1F2C and note it as unknown.</div>
+        <div class="prompt">Make sure the IoT network can't reach my main LAN, except Home Assistant on port 8123.</div>
+        <div class="prompt">Block inbound traffic from CN and RU to my port-forwarded services.</div>
+        <div class="prompt">Turn off the kids' internet every night from 10pm to 6am.</div>
+        <div class="prompt">Show me every firewall policy that allows traffic into Internal.</div>
+        <div class="prompt">Power-cycle the camera on switch port 7.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="safety">
+    <div class="wrap">
+      <h2>Safety by design</h2>
+      <p class="section-lead">Letting an AI change your firewall should make you a little nervous. These guard rails keep changes deliberate, visible and reversible.</p>
+      <div class="grid c2">
+        <div class="card"><h3>Approval on every write</h3><p>Write tools carry MCP <code>destructiveHint</code> annotations, so clients like Claude Code prompt before running them. The server's built-in instructions tell the agent to describe changes and confirm with you first.</p></div>
+        <div class="card"><h3>Dry runs</h3><p>Firewall create and update accept <code>dryRun: true</code>, which returns the exact request and a before/after summary without touching the console.</p></div>
+        <div class="card"><h3>Audit log</h3><p>Every change is appended as a JSON line to <code>~/.unifi-mcp/audit.log</code> (or <code>/data/audit.log</code> in Docker). Deleted policies are logged in full and can be recreated.</p></div>
+        <div class="card"><h3>Read-only mode</h3><p>Set <code>UNIFI_READ_ONLY=true</code> and write tools aren't registered at all, so the agent can't see them, let alone call them.</p></div>
+        <div class="card"><h3>System policies protected</h3><p>Built-in system-defined firewall policies are refused for update and delete. The agent is pointed to an overriding user policy instead.</p></div>
+        <div class="card"><h3>Locked-down HTTP mode</h3><p>Over HTTP, a bearer token of 24+ characters is mandatory, browser origins are rejected by default, and the Docker port binds to localhost unless you choose otherwise.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="start" class="alt">
+    <div class="wrap">
+      <h2>Get started</h2>
+      <p class="section-lead">You need a UniFi console running Network 10.x and Node.js 22.19+ or Docker. Setup takes about five minutes.</p>
+
+      <ol class="steps" style="margin:0 0 28px">
+        <li><strong>Create an API key</strong><p>UniFi Network → Settings → Control Plane → Integrations → <em>Create API Key</em>.</p></li>
+        <li><strong>Configure</strong><p>Clone the repo, copy <code>.env.example</code> to <code>.env</code>, and set <code>UNIFI_HOST</code> and <code>UNIFI_API_KEY</code>. If blocking fails, add a local-only admin account as <code>UNIFI_USERNAME</code> / <code>UNIFI_PASSWORD</code>.</p></li>
+        <li><strong>Run and connect</strong><p>Pick Node or Docker below, run the connection check, and add the server to your AI client.</p></li>
+      </ol>
+
+      <div class="tabs" role="tablist" aria-label="Install method">
+        <button class="tab" role="tab" id="tab-node" aria-controls="panel-node" aria-selected="true">Node.js</button>
+        <button class="tab" role="tab" id="tab-docker" aria-controls="panel-docker" aria-selected="false" tabindex="-1">Docker Compose</button>
+        <button class="tab" role="tab" id="tab-desktop" aria-controls="panel-desktop" aria-selected="false" tabindex="-1">Claude Desktop</button>
+      </div>
+      <div class="panel" role="tabpanel" id="panel-node" aria-labelledby="tab-node">
+        <p>Build, check the connection, then let Claude Code launch the server on demand over stdio.</p>
+        <div class="code"><pre><code>git clone https://github.com/SmugZombie/Unifi-MCP.git &amp;&amp; cd Unifi-MCP
+npm install &amp;&amp; npm run build
+cp .env.example .env            # fill in UNIFI_HOST and UNIFI_API_KEY
+set -a; . ./.env; set +a
+npm run check                   # verifies TLS, key, site, zones and blocking access</code></pre></div>
+        <div class="code"><pre><code>claude mcp add unifi \
+  -e UNIFI_HOST=https://192.168.1.1 \
+  -e UNIFI_API_KEY=your-key \
+  -e UNIFI_VERIFY_TLS=false \
+  -- node "$PWD/dist/index.js"</code></pre></div>
+      </div>
+      <div class="panel" role="tabpanel" id="panel-docker" aria-labelledby="tab-docker" hidden>
+        <p>Runs as a long-lived HTTP service at <code>/mcp</code>, protected by a bearer token and published on localhost only.</p>
+        <div class="code"><pre><code>cp .env.example .env            # fill in UNIFI_* settings
+echo "MCP_AUTH_TOKEN=$(openssl rand -hex 32)" &gt;&gt; .env
+docker compose up -d --build
+docker compose run --rm unifi-mcp dist/check.js</code></pre></div>
+        <div class="code"><pre><code>claude mcp add --transport http unifi http://127.0.0.1:3000/mcp \
+  --header "Authorization: Bearer $(grep '^MCP_AUTH_TOKEN=' .env | cut -d= -f2)"</code></pre></div>
+      </div>
+      <div class="panel" role="tabpanel" id="panel-desktop" aria-labelledby="tab-desktop" hidden>
+        <p>Add to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> and restart Claude Desktop.</p>
+        <div class="code"><pre><code>{
+  "mcpServers": {
+    "unifi": {
+      "command": "node",
+      "args": ["/path/to/Unifi-MCP/dist/index.js"],
+      "env": {
+        "UNIFI_HOST": "https://192.168.1.1",
+        "UNIFI_API_KEY": "your-key",
+        "UNIFI_VERIFY_TLS": "false"
+      }
+    }
+  }
+}</code></pre></div>
+      </div>
+
+      <div class="callout"><p><strong>Self-signed certificate:</strong> UniFi consoles ship with one. Either point <code>UNIFI_CA_CERT</code> at the console's exported certificate, or set <code>UNIFI_VERIFY_TLS=false</code> on a network you trust.</p></div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <h2>FAQ and troubleshooting</h2>
+      <p class="section-lead">The issues people actually hit.</p>
+      <details>
+        <summary>Which UniFi versions are supported?</summary>
+        <p>It's built against the UniFi Network 10.6.106 API on UniFi OS 5.x, and should work on any Network 10.x release with the zone-based firewall. The OpenAPI spec it targets is included in the repo under <code>docs/</code>.</p>
+      </details>
+      <details>
+        <summary>Do I need a username and password, or is the API key enough?</summary>
+        <p>Usually just the key. Many consoles accept the API key on the internal API used for blocking. Run <code>npm run check</code>: if the "Internal API" step fails, add a <em>local-only</em> admin account. Don't use your Ubiquiti cloud login; MFA will break it.</p>
+      </details>
+      <details>
+        <summary>The Docker container can't reach my console, but my computer can.</summary>
+        <p>This is almost always a Docker network whose subnet overlaps your LAN. Once Docker runs out of <code>172.x</code> ranges it starts handing out <code>192.168.x.0/20</code> networks, and one of them may cover your console's address. Check with:</p>
+        <div class="code" style="margin-top:10px"><pre><code>for n in $(docker network ls -q); do
+  docker network inspect -f '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' $n
+done</code></pre></div>
+        <p>Fix it by setting <code>default-address-pools</code> in Docker's daemon settings to a range clear of your LAN, then recreating the overlapping network, or run the server with Node instead.</p>
+      </details>
+      <details>
+        <summary>Why didn't my new block rule take effect?</summary>
+        <p>Policies are evaluated per source→destination zone pair, and the first match wins. An existing ALLOW higher in the list will shadow a new BLOCK. Create it with <code>position: "top"</code> or move it with <code>unifi_move_firewall_policy</code>.</p>
+      </details>
+      <details>
+        <summary>What's the difference between blocking a client and a firewall policy?</summary>
+        <p>Blocking removes the device from the network entirely, Wi-Fi and wired. A firewall policy matching its MAC lets you restrict only some traffic, for example internet access at night, while it stays connected.</p>
+      </details>
+      <details>
+        <summary>Does my network data leave my house?</summary>
+        <p>The server only talks to your console. Tool results go to whichever AI client you connect, so if that client uses a cloud model, the results it reads are sent to that model provider as part of the conversation.</p>
+      </details>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>UniFi MCP · <a href="https://github.com/SmugZombie/Unifi-MCP">Source on GitHub</a></span>
+    <span>An independent project, not affiliated with or endorsed by Ubiquiti Inc. UniFi is a trademark of Ubiquiti Inc.</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem("theme"); if (saved) root.setAttribute("data-theme", saved); } catch (e) {}
+  document.getElementById("theme").addEventListener("click", function () {
+    var dark = root.getAttribute("data-theme")
+      ? root.getAttribute("data-theme") === "dark"
+      : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var next = dark ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("theme", next); } catch (e) {}
+  });
+
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+  function select(tab) {
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute("aria-selected", on);
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+    });
+    tab.focus();
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener("click", function () { select(t); });
+    t.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight") select(tabs[(i + 1) % tabs.length]);
+      if (e.key === "ArrowLeft") select(tabs[(i - 1 + tabs.length) % tabs.length]);
+    });
+  });
+
+  document.querySelectorAll(".code").forEach(function (block) {
+    var btn = document.createElement("button");
+    btn.className = "copy";
+    btn.type = "button";
+    btn.textContent = "Copy";
+    btn.addEventListener("click", function () {
+      var text = block.querySelector("code").innerText;
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = "Copied";
+        setTimeout(function () { btn.textContent = "Copy"; }, 1500);
+      });
+    });
+    block.appendChild(btn);
+  });
+})();
+</script>
+</body>
+</html>
