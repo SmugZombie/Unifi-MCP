@@ -27,7 +27,7 @@ Home and small-office networks keep growing: dozens of phones, TVs, cameras and 
 
 ```mermaid
 flowchart LR
-    A["AI client<br/>Claude Code, Claude Desktop,<br/>other MCP agents"] -- "tool call (MCP over stdio or HTTP)" --> S["UniFi MCP server<br/>22 tools · name→ID resolution<br/>policy builder · dry runs · audit log"]
+    A["AI client<br/>Claude Code, Claude Desktop,<br/>other MCP agents"] -- "tool call (MCP over stdio or HTTP)" --> S["UniFi MCP server<br/>26 tools · name→ID resolution<br/>policy builder · dry runs · audit log"]
     S -- result --> A
     S -- "API key" --> O["Official Network API<br/>/proxy/network/integration/v1"]
     S -- "API key or local login" --> I["Internal API<br/>/proxy/network/api/s/{site}"]
@@ -48,8 +48,9 @@ flowchart LR
 |---|---|---|
 | Devices, networks, Wi-Fi, firewall zones and policies, ordering, device restart, PoE power-cycle | Official Network API (`/proxy/network/integration/v1`) | API key |
 | Client search including offline clients, block, unblock, reconnect, rename | Internal API (`/proxy/network/api/s/<site>`) | API key, falling back to local admin login |
+| Traffic flow logs and flow statistics | Internal v2 API (`/proxy/network/v2/api/site/<site>`) | API key, falling back to local admin login |
 
-The official API has no "block client" action, so blocking goes through the internal API. Many consoles accept the API key there too. If yours doesn't, set `UNIFI_USERNAME`/`UNIFI_PASSWORD` and the server logs in with them automatically when the key is rejected.
+The official API has no "block client" action and no flow logs, so those go through the internal APIs. Many consoles accept the API key there too. If yours doesn't, set `UNIFI_USERNAME`/`UNIFI_PASSWORD` and the server logs in with them automatically when the key is rejected.
 
 The OpenAPI spec for 10.6.106 is in [`docs/`](docs/unifi-network-api-10.6.106.yaml).
 
@@ -163,10 +164,13 @@ claude mcp add unifi \
 **Read**
 - `unifi_get_overview`: version, site, device states, client count, WANs
 - `unifi_list_devices`, `unifi_get_device`: devices with live stats
-- `unifi_list_clients`: connected, all, or blocked clients, with `search` by name, vendor, IP or MAC
+- `unifi_list_clients`: connected, all, or blocked clients, with `search` by name, vendor, IP or MAC, current download/upload rates and totals, `sortBy: "traffic"`, and paging
+- `unifi_get_client`: every field the controller has for one device
+- `unifi_list_flows`, `unifi_get_flow`: traffic flow logs (Insights → Flows) filtered by time, device, action, direction, risk, IP, port, domain or country
+- `unifi_flow_statistics`: top clients, destinations, apps and blocking policies, and blocked/allowed counts by country and risk, per hour, day, week or month
 - `unifi_list_networks`, `unifi_list_wifi`
 - `unifi_list_firewall_zones`, `unifi_list_firewall_policies`, `unifi_get_firewall_policy`, `unifi_get_firewall_policy_order`
-- `unifi_api_get`: read-only access to any other endpoint
+- `unifi_api_get`: read-only access to any other endpoint, with paging, `fields` selection and `match` filtering for large lists
 
 **Write** (not registered when `UNIFI_READ_ONLY=true`)
 - `unifi_block_client`, `unifi_unblock_client`, `unifi_reconnect_client`, `unifi_rename_client`
@@ -178,6 +182,9 @@ Firewall tools accept **zone and network names** ("IoT", "External") as well as 
 ### Example prompts
 
 - "What's on my network right now that I don't recognise?"
+- "Which devices are using the most bandwidth right now?"
+- "What has the living-room TV been connecting to in the last hour?"
+- "What got blocked overnight, and by which policies?"
 - "Block the device called *ESP_3A1F2C* and note it as unknown."
 - "Create a firewall policy so the IoT zone can't reach Internal, except my Home Assistant at 10.0.0.20 on port 8123. Show me a dry run first."
 - "Block inbound traffic from CN and RU to my port-forwarded services."

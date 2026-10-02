@@ -93,8 +93,8 @@ export class LegacyApiClient {
     return res;
   }
 
-  async request<T = unknown>(subPath: string, opts: RequestOptions = {}): Promise<T[]> {
-    const path = `/proxy/network/api/s/${await this.siteRef()}${subPath}`;
+  /** Send with auth, retrying once with session login if the key or session is rejected. */
+  private async authed(path: string, opts: RequestOptions): Promise<unknown> {
     const method = opts.method ?? "GET";
     let res = await this.send(path, opts);
 
@@ -117,12 +117,24 @@ export class LegacyApiClient {
         );
       }
     }
+    return HttpTransport.decode(res, method, path);
+  }
 
-    const env = (await HttpTransport.decode(res, method, path)) as LegacyEnvelope<T>;
+  /** Classic API under /api/s/{site}; unwraps the {meta, data} envelope. */
+  async request<T = unknown>(subPath: string, opts: RequestOptions = {}): Promise<T[]> {
+    const path = `/proxy/network/api/s/${await this.siteRef()}${subPath}`;
+    const env = (await this.authed(path, opts)) as LegacyEnvelope<T>;
     if (env?.meta?.rc === "error") {
-      throw new UnifiApiError(`${method} ${path} failed: ${env.meta.msg ?? "unknown error"}`, res.status, method, path, env);
+      const method = opts.method ?? "GET";
+      throw new UnifiApiError(`${method} ${path} failed: ${env.meta.msg ?? "unknown error"}`, 200, method, path, env);
     }
     return env?.data ?? [];
+  }
+
+  /** Newer internal API under /v2/api/site/{site} (traffic flows, etc.); returns the raw JSON. */
+  async requestV2<T = unknown>(subPath: string, opts: RequestOptions = {}): Promise<T> {
+    const path = `/proxy/network/v2/api/site/${await this.siteRef()}${subPath}`;
+    return (await this.authed(path, opts)) as T;
   }
 
   /** All clients the controller has ever seen (including offline and blocked). */

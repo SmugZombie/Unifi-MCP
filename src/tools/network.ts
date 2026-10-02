@@ -2,9 +2,33 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { defineTool, type UnifiContext } from "../context.js";
 import type { Json } from "../firewall.js";
-import type { LegacyClient } from "../legacy.js";
+import { normalizeMac, type LegacyClient } from "../legacy.js";
 
 const MAX_RAW_CHARS = 60_000;
+
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const kbps = (bytesPerSec?: number) => (bytesPerSec === undefined ? undefined : Math.round((bytesPerSec * 8) / 100) / 10);
+const mb = (bytes?: number) => (bytes === undefined ? undefined : Math.round(bytes / 1e5) / 10);
+
+/**
+ * Traffic for a connected client. UniFi reports counters from the AP/switch port's point of view,
+ * so "tx" is traffic sent to the client (its download) and "rx" is its upload.
+ * Wired clients use the "wired-" prefixed counters.
+ */
+export function clientTraffic(c: LegacyClient): Json | undefined {
+  const p = c.is_wired ? "wired-" : "";
+  const down = num(c[`${p}tx_bytes-r`]);
+  const up = num(c[`${p}rx_bytes-r`]);
+  const totalDown = num(c[`${p}tx_bytes`]);
+  const totalUp = num(c[`${p}rx_bytes`]);
+  if ([down, up, totalDown, totalUp].every((v) => v === undefined)) return undefined;
+  return {
+    downKbps: kbps(down),
+    upKbps: kbps(up),
+    totalDownMB: mb(totalDown),
+    totalUpMB: mb(totalUp),
+  };
+}
 
 export function summarizeLegacyClient(c: LegacyClient, online: boolean): Json {
   const lastSeen = c.last_seen ? new Date(c.last_seen * 1000).toISOString() : undefined;
@@ -21,6 +45,8 @@ export function summarizeLegacyClient(c: LegacyClient, online: boolean): Json {
     blocked: c.blocked ?? false,
     guest: c.is_guest || undefined,
     signal: online ? c.signal : undefined,
+    traffic: online ? clientTraffic(c) : undefined,
+    uptimeSec: online ? num(c.uptime) : undefined,
     lastSeen,
     note: c.note || undefined,
   };
@@ -34,6 +60,57 @@ function matches(c: Json, needle: string): boolean {
       String(c[k] ?? "").toLowerCase().includes(n),
     ) || (macHex.length >= 4 && String(c.mac).replace(/:/g, "").includes(macHex))
   );
+}
+
+function pick(item: unknown, fields: string[]): Json {
+  const out: Json = {};
+  for (const f of fields) {
+    let v: unknown = item;
+    for (const part of f.split(".")) v = v && typeof v === "object" ? (v as Json)[part] : undefined;
+    if (v !== undefined) out[f] = v;
+  }
+  return out;
+}
+
+/** Page, filter and project list responses so they fit in one tool result. */
+export function pageResult(
+  data: unknown,
+  opts: { fields?: string[]; match?: string; offset: number; limit: number },
+): unknown {
+  const list = Array.isArray(data) ? data : Array.isArray((data as Json)?.data) ? ((data as Json).data as unknown[]) : undefined;
+  if (!list) {
+    const text = JSON.stringify(data);
+    return text.length > MAX_RAW_CHARS
+      ? `${text.slice(0, MAX_RAW_CHARS)}\n…truncated (${text.length} chars total). This endpoint returned a single large object; request a narrower endpoint.`
+      : data;
+  }
+  const needle = opts.match?.toLowerCase();
+  const filtered = needle ? list.filter((i) => JSON.stringify(i).toLowerCase().includes(needle)) : list;
+  let items = filtered.slice(opts.offset, opts.offset + opts.limit).map((i) => (opts.fields?.length ? pick(i, opts.fields) : i));
+
+  // Shrink the page rather than cutting JSON mid-item when it is too large.
+  let note: string | undefined;
+  const size = (arr: unknown[]) => JSON.stringify(arr).length;
+  if (size(items) > MAX_RAW_CHARS) {
+    let lo = 0;
+    let hi = items.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (size(items.slice(0, mid)) <= MAX_RAW_CHARS) lo = mid;
+      else hi = mid - 1;
+    }
+    items = items.slice(0, Math.max(lo, 1));
+    note = `Page reduced to ${items.length} items to stay under ${MAX_RAW_CHARS} characters. Pass \`fields\` to fetch more items per page.`;
+  }
+  const next = opts.offset + items.length;
+  return {
+    total: filtered.length,
+    offset: opts.offset,
+    returned: items.length,
+    ...(next < filtered.length ? { nextOffset: next } : {}),
+    ...(note ? { note } : {}),
+    items,
+  };
 }
 
 export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void {
@@ -110,18 +187,25 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
     {
       title: "List / search clients",
       description:
-        "List client devices (phones, laptops, IoT…) with name, hostname, vendor, IP, MAC, network, wifi/wired, and blocked status. " +
-        "Use `search` to find a client by name, hostname, vendor, IP or partial MAC before blocking or writing a firewall rule for it.",
+        "List client devices (phones, laptops, IoT…) with name, hostname, vendor, IP, MAC, network, wifi/wired, blocked status, " +
+        "and for connected clients current traffic (downKbps/upKbps, a per-second snapshot) and totals since connecting (totalDownMB/totalUpMB). " +
+        "Use `search` to find a client by name, hostname, vendor, IP or partial MAC before blocking or writing a firewall rule for it. " +
+        "Use sortBy=traffic to find the busiest devices. For every field of one client, use unifi_get_client.",
       input: {
         status: z
           .enum(["connected", "all", "blocked"])
           .default("connected")
           .describe("connected = online now; all = every client ever seen (incl. offline); blocked = currently blocked clients"),
         search: z.string().optional().describe("Case-insensitive match on name, hostname, vendor, IP, network or MAC"),
+        sortBy: z
+          .enum(["name", "traffic", "totalTraffic", "lastSeen"])
+          .default("name")
+          .describe("traffic = current rate, highest first; totalTraffic = bytes since connecting; lastSeen = most recent first"),
+        offset: z.number().int().min(0).default(0).describe("Skip this many clients (use nextOffset from a previous call)"),
         limit: z.number().int().min(1).max(1000).default(200),
       },
     },
-    async ({ status, search, limit }) => {
+    async ({ status, search, sortBy, offset, limit }) => {
       let clients: Json[];
       let source = "internal";
       try {
@@ -143,8 +227,48 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
         clients = await ctx.integration.siteList<Json>("/clients");
       }
       if (search) clients = clients.filter((c) => matches(c, search));
-      clients.sort((a, b) => String(a.name ?? a.mac).localeCompare(String(b.name ?? b.mac)));
-      return { source, total: clients.length, clients: clients.slice(0, limit) };
+      const rate = (c: Json) => (c.traffic?.downKbps ?? 0) + (c.traffic?.upKbps ?? 0);
+      const total = (c: Json) => (c.traffic?.totalDownMB ?? 0) + (c.traffic?.totalUpMB ?? 0);
+      const byName = (a: Json, b: Json) => String(a.name ?? a.mac).localeCompare(String(b.name ?? b.mac));
+      const order: Record<string, (a: Json, b: Json) => number> = {
+        name: byName,
+        traffic: (a, b) => rate(b) - rate(a) || byName(a, b),
+        totalTraffic: (a, b) => total(b) - total(a) || byName(a, b),
+        lastSeen: (a, b) => String(b.lastSeen ?? "").localeCompare(String(a.lastSeen ?? "")) || byName(a, b),
+      };
+      clients.sort(order[sortBy]);
+      const page = clients.slice(offset, offset + limit);
+      const next = offset + page.length;
+      return {
+        source,
+        total: clients.length,
+        offset,
+        returned: page.length,
+        ...(next < clients.length ? { nextOffset: next } : {}),
+        clients: page,
+      };
+    },
+  );
+
+  defineTool(
+    server,
+    ctx,
+    "unifi_get_client",
+    {
+      title: "Get client details",
+      description:
+        "Every field the controller has for one client (known record merged with live stats when connected): " +
+        "radio, channel, AP, switch port, signal, rates, counters, DHCP and fingerprint data. Prefer this over unifi_api_get for a single device.",
+      input: { mac: z.string().describe("Client MAC address (any separator)") },
+    },
+    async ({ mac }) => {
+      const m = normalizeMac(mac);
+      const [known, active] = await Promise.all([ctx.legacy.knownClients(), ctx.legacy.activeClients()]);
+      const k = known.find((c) => c.mac === m);
+      const a = active.find((c) => c.mac === m);
+      if (!k && !a) throw new Error(`No client with MAC ${m}. Use unifi_list_clients with search to find it.`);
+      const record = { ...k, ...a } as LegacyClient;
+      return { summary: summarizeLegacyClient(record, Boolean(a)), record };
     },
   );
 
@@ -177,13 +301,22 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
       description:
         "Read-only escape hatch for any GET endpoint not covered by other tools. " +
         "api=official: path under /proxy/network/integration, e.g. /v1/sites/{siteId}/vpn/servers ({siteId} is substituted). " +
-        "api=internal: path under /proxy/network/api/s/<site>, e.g. /stat/health, /stat/sysinfo, /rest/portforward, /stat/event.",
+        "api=internal: path under /proxy/network/api/s/<site>, e.g. /stat/health, /stat/sysinfo, /rest/portforward, /stat/event. " +
+        "List responses are paged: use `fields` to keep only the keys you need (dot paths allowed) and `match` to filter items, " +
+        "then follow nextOffset. Responses are capped at about 60,000 characters.",
       input: {
         api: z.enum(["official", "internal"]),
         path: z.string().startsWith("/"),
+        fields: z
+          .array(z.string())
+          .optional()
+          .describe('Keys to keep from each list item, e.g. ["mac","hostname","tx_bytes-r","rx_bytes-r"] or ["uplink.name"]'),
+        match: z.string().optional().describe("Keep only list items whose JSON contains this text (case-insensitive)"),
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(1000).default(100),
       },
     },
-    async ({ api, path }) => {
+    async ({ api, path, fields, match, offset, limit }) => {
       let data: unknown;
       if (api === "official") {
         const site = await ctx.integration.resolveSite();
@@ -191,8 +324,7 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
       } else {
         data = await ctx.legacy.request(path);
       }
-      const text = JSON.stringify(data, null, 1);
-      return text.length > MAX_RAW_CHARS ? text.slice(0, MAX_RAW_CHARS) + `\n…truncated (${text.length} chars total)` : data;
+      return pageResult(data, { fields, match, offset, limit });
     },
   );
 

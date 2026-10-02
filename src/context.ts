@@ -59,6 +59,29 @@ export class UnifiContext {
     return this.cached("networks", () => this.integration.siteList<Network>("/networks"));
   }
 
+  private dpi?: Promise<{ apps: Map<number, string>; categories: Map<number, string> }>;
+
+  /**
+   * DPI catalogue (cached for the process lifetime). Application ids in the official API combine
+   * category and app: (categoryId << 16) | appId. Flow statistics report the two parts separately.
+   */
+  dpiCatalogue(): Promise<{ apps: Map<number, string>; categories: Map<number, string> }> {
+    type Item = { id: number; name: string };
+    this.dpi ??= Promise.all([
+      this.integration.listAll<Item>("/v1/dpi/applications", undefined, 20000),
+      this.integration.listAll<Item>("/v1/dpi/categories"),
+    ])
+      .then(([apps, cats]) => ({
+        apps: new Map(apps.map((a) => [a.id, a.name])),
+        categories: new Map(cats.map((c) => [c.id, c.name])),
+      }))
+      .catch((err) => {
+        this.dpi = undefined;
+        throw err;
+      });
+    return this.dpi;
+  }
+
   /** Name/ID resolvers for zones and networks, so tools can accept "IoT" instead of a UUID. */
   async lookups(): Promise<Lookups & { zoneName(id: string): string; networkName(id: string): string }> {
     const [zones, networks] = await Promise.all([this.zones(), this.networks()]);
@@ -92,7 +115,7 @@ export class UnifiContext {
 }
 
 export function ok(data: unknown): CallToolResult {
-  return { content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data) }] };
 }
 
 interface ToolDef<S extends ZodRawShape> {

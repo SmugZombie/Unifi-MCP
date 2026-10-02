@@ -28,9 +28,17 @@ let ordering: string[] = [];
 const blocked = new Set<string>();
 const users = [
   { _id: "u1", mac: "aa:bb:cc:dd:ee:01", hostname: "living-room-tv", oui: "Samsung", last_ip: "10.0.30.20", blocked: false },
-  { _id: "u2", mac: "aa:bb:cc:dd:ee:02", name: "Alex iPhone", oui: "Apple", ip: "10.0.0.15", essid: "Home" },
+  { _id: "u2", mac: "aa:bb:cc:dd:ee:02", name: "Alex iPhone", oui: "Apple", ip: "10.0.0.15", essid: "Home", "tx_bytes-r": 125000, "rx_bytes-r": 12500, tx_bytes: 5e8, rx_bytes: 2e7, uptime: 3600 },
+  { _id: "u3", mac: "aa:bb:cc:dd:ee:03", name: "NAS", oui: "Synology", ip: "10.0.0.5", is_wired: true, "wired-tx_bytes-r": 250000, "wired-rx_bytes-r": 1000, "wired-tx_bytes": 1e9, "wired-rx_bytes": 1e6, uptime: 7200 },
 ];
 const requests: string[] = [];
+let lastFlowQuery: any;
+const flow = {
+  id: "f1", time: 1790928000000, action: "blocked", direction: "outgoing", risk: "low", protocol: "TCP", service: "HTTPS", count: 1,
+  source: { ip: "10.0.0.5", port: 50000, mac: "aa:bb:cc:dd:ee:03" },
+  destination: { ip: "203.0.113.9", port: 443, region: "CN", zone_name: "External", domains: ["example.cn"] },
+  policies: [{ id: "x", type: "FIREWALL" }], traffic_data: { bytes_rx: 100 },
+};
 
 async function body(req: IncomingMessage) {
   let s = "";
@@ -59,7 +67,7 @@ const fake = createServer(async (req, res) => {
     const sub = p.slice("/proxy/network/api/s/default".length);
     const env = (data: unknown[]) => json(200, { meta: { rc: "ok" }, data });
     if (sub === "/rest/user") return env(users.map((u) => ({ ...u, blocked: blocked.has(u.mac) })));
-    if (sub === "/stat/sta") return env([users[1]]);
+    if (sub === "/stat/sta") return env([users[1], users[2]]);
     if (sub === "/cmd/stamgr") {
       if (b.cmd === "block-sta") blocked.add(b.mac);
       if (b.cmd === "unblock-sta") blocked.delete(b.mac);
@@ -67,6 +75,23 @@ const fake = createServer(async (req, res) => {
     }
     if (sub.startsWith("/rest/user/")) return env([]);
     return json(404, { meta: { rc: "error", msg: "not found" } });
+  }
+  if (p.startsWith("/proxy/network/v2/api/site/default/")) {
+    if (req.headers.cookie !== "TOKEN=sess123") return json(401, {});
+    const sub = p.slice("/proxy/network/v2/api/site/default".length);
+    if (sub === "/traffic-flows" && req.method === "POST") {
+      lastFlowQuery = b;
+      return json(200, { data: [flow], has_next: true, page_number: b.pageNumber, total_element_count: 120, total_page_count: 3 });
+    }
+    if (sub === "/traffic-flows/f1") return json(200, { ...flow, flow_start_time: 1790927990000 });
+    if (sub === "/traffic-flow-latest-statistics") {
+      return json(200, {
+        blocked_count_by_risk: { low: 4 },
+        top_all_traffic_by_application: [{ application_id: 112, category_id: 4, bytes: 7e9 }],
+        top_all_count_by_client: [{ count: 9, client_mac: "aa:bb:cc:dd:ee:03", client_name: null, icon_filename: "x.png" }],
+      });
+    }
+    return json(404, {});
   }
   if (!p.startsWith("/proxy/network/integration/")) return json(404, {});
   if (req.headers["x-api-key"] !== "key123") return json(401, { message: "Unauthorized" });
@@ -79,6 +104,8 @@ const fake = createServer(async (req, res) => {
   if (ip === `${s}/devices`) return page([{ id: "d1", name: "UDM", state: "ONLINE", firmwareUpdatable: false }]);
   if (ip === `${s}/clients`) return page([{ id: "c1", name: "Alex iPhone" }]);
   if (ip === `${s}/wans`) return page([]);
+  if (ip === "/v1/dpi/applications") return page([{ id: (4 << 16) | 112, name: "Youtube" }, { id: 112, name: "Wrong app" }]);
+  if (ip === "/v1/dpi/categories") return page([{ id: 4, name: "Media streaming services" }]);
   if (ip === `${s}/firewall/policies` && req.method === "GET") return page(policies);
   if (ip === `${s}/firewall/policies` && req.method === "POST") {
     const created = { ...b, id: `p-${policies.length}`, index: 100 + policies.length, metadata: { origin: "USER_DEFINED" } };
@@ -155,6 +182,68 @@ test("overview", async () => {
   const o = await call("unifi_get_overview");
   assert.equal(o.application.applicationVersion, "10.6.106");
   assert.equal(o.connectedClients, 1);
+});
+
+test("client traffic: rates, sorting and full details", async () => {
+  const r = await call("unifi_list_clients", { sortBy: "traffic" });
+  assert.deepEqual(r.clients.map((c: any) => c.name), ["NAS", "Alex iPhone"]);
+  // tx is traffic sent to the client (its download); wired clients use the wired- counters.
+  assert.deepEqual(r.clients[0].traffic, { downKbps: 2000, upKbps: 8, totalDownMB: 1000, totalUpMB: 1 });
+  assert.deepEqual(r.clients[1].traffic, { downKbps: 1000, upKbps: 100, totalDownMB: 500, totalUpMB: 20 });
+  assert.equal(r.clients[1].uptimeSec, 3600);
+
+  const p1 = await call("unifi_list_clients", { status: "all", limit: 2 });
+  assert.equal(p1.total, 3);
+  assert.equal(p1.nextOffset, 2);
+  const p2 = await call("unifi_list_clients", { status: "all", limit: 2, offset: p1.nextOffset });
+  assert.equal(p2.returned, 1);
+  assert.equal(p2.nextOffset, undefined);
+
+  const d = await call("unifi_get_client", { mac: "AA:BB:CC:DD:EE:02" });
+  assert.equal(d.record["tx_bytes-r"], 125000);
+  assert.equal(d.summary.online, true);
+  await assert.rejects(call("unifi_get_client", { mac: "00:00:00:00:00:99" }), /No client/);
+});
+
+test("traffic flows: query body, client resolution, summaries", async () => {
+  const r = await call("unifi_list_flows", { client: "nas", lastMinutes: 30, destinationPort: [443], risk: ["low"], page: 1, pageSize: 10 });
+  assert.deepEqual(lastFlowQuery.action, ["allowed", "blocked"], "default must request both, the controller defaults to blocked only");
+  assert.deepEqual(lastFlowQuery.source_mac, ["aa:bb:cc:dd:ee:03"]);
+  assert.deepEqual(lastFlowQuery.destination_port, [443]);
+  assert.deepEqual(lastFlowQuery.risk, ["low"]);
+  assert.equal(lastFlowQuery.pageNumber, 1);
+  assert.equal(lastFlowQuery.timestampTo - lastFlowQuery.timestampFrom, 30 * 60_000);
+  assert.equal(r.total, 120);
+  assert.equal(r.nextPage, 2);
+  assert.equal(r.flows[0].from, "NAS 10.0.0.5:50000");
+  assert.equal(r.flows[0].to, "203.0.113.9:443 (example.cn) CN");
+
+  await call("unifi_list_flows", { action: "blocked" });
+  assert.deepEqual(lastFlowQuery.action, ["blocked"]);
+  assert.equal(lastFlowQuery.source_mac, undefined);
+  await assert.rejects(call("unifi_list_flows", { client: "nonexistent" }), /No client matches/);
+
+  const d = await call("unifi_get_flow", { flowId: "f1" });
+  assert.equal(d.flow.flow_start_time, 1790927990000);
+  await assert.rejects(call("unifi_get_flow", { flowId: "../x" }), /Invalid flow id/);
+
+  const st = await call("unifi_flow_statistics", { period: "WEEK", top: 3 });
+  assert.equal(st.top_all_traffic_by_application[0].application, "Youtube", "app id must combine category << 16");
+  assert.equal(st.top_all_traffic_by_application[0].category, "Media streaming services");
+  assert.equal(st.top_all_count_by_client[0].client, "NAS");
+  assert.equal(st.top_all_count_by_client[0].icon_filename, undefined);
+  assert.ok(requests.includes("GET /proxy/network/v2/api/site/default/traffic-flow-latest-statistics"));
+});
+
+test("raw GET pages and projects list responses", async () => {
+  const p = await call("unifi_api_get", { api: "internal", path: "/rest/user", fields: ["mac", "oui"], limit: 2 });
+  assert.equal(p.total, 3);
+  assert.equal(p.returned, 2);
+  assert.equal(p.nextOffset, 2);
+  assert.deepEqual(p.items[0], { mac: "aa:bb:cc:dd:ee:01", oui: "Samsung" });
+  const m = await call("unifi_api_get", { api: "internal", path: "/rest/user", match: "synology" });
+  assert.equal(m.total, 1);
+  assert.equal(m.nextOffset, undefined);
 });
 
 test("search clients and block/unblock via session fallback", async () => {

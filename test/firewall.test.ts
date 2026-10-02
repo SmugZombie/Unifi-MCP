@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildPolicy, deepMerge, summarizePolicy, type Lookups } from "../src/firewall.ts";
+import { pageResult } from "../src/tools/network.ts";
 
 const lookups: Lookups = {
   zoneId: (k) => ({ internal: "z-int", external: "z-ext", iot: "z-iot" })[k.toLowerCase()] ?? k,
@@ -83,4 +84,16 @@ test("summarizePolicy is readable", () => {
   assert.equal(s.from, "ext: regions CN,RU");
   assert.equal(s.to, "int: ports 443");
   assert.equal(s.protocol, "TCP_UDP (IPV4_AND_IPV6)");
+});
+
+test("pageResult shrinks oversized pages instead of cutting JSON", () => {
+  const big = Array.from({ length: 200 }, (_, i) => ({ i, blob: "x".repeat(1000) }));
+  const r = pageResult(big, { offset: 0, limit: 200 }) as any;
+  assert.ok(r.returned < 200 && r.returned > 0);
+  assert.equal(r.nextOffset, r.returned);
+  assert.match(r.note, /fields/);
+  assert.ok(JSON.stringify(r.items).length <= 60_000);
+  const slim = pageResult(big, { offset: 0, limit: 200, fields: ["i"] }) as any;
+  assert.equal(slim.returned, 200);
+  assert.equal(slim.nextOffset, undefined);
 });
