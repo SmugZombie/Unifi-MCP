@@ -15,6 +15,35 @@ export class UnifiApiError extends Error {
   }
 }
 
+/**
+ * Join a fixed API prefix with a caller-supplied sub-path, refusing anything that could resolve
+ * outside the prefix: dot segments (including percent-encoded ones, which URL parsing also
+ * collapses), encoded slashes, backslashes and fragments. Query strings are allowed.
+ */
+export function safeJoin(prefix: string, subPath: string): string {
+  if (!subPath.startsWith("/")) throw new Error(`Invalid API path "${subPath}": must start with /`);
+  if (/[\\#]/.test(subPath)) throw new Error(`Invalid API path "${subPath}": backslashes and # are not allowed`);
+  const [pathPart] = subPath.split("?", 1);
+  for (const segment of pathPart.split("/")) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      throw new Error(`Invalid API path "${subPath}": malformed percent-encoding`);
+    }
+    if (decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\")) {
+      throw new Error(`Invalid API path "${subPath}": "." / ".." segments and encoded slashes are not allowed`);
+    }
+  }
+  const full = prefix + subPath;
+  // Belt and braces: resolution must not move the path out of the prefix.
+  const resolved = new URL(full, "http://unifi.invalid").pathname;
+  if (resolved !== full.split("?", 1)[0] || !resolved.startsWith(prefix + "/")) {
+    throw new Error(`Invalid API path "${subPath}": resolves outside ${prefix}`);
+  }
+  return full;
+}
+
 export interface RequestOptions {
   method?: string;
   query?: Record<string, string | number | boolean | undefined>;

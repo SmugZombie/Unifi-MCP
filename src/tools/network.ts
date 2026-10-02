@@ -301,11 +301,13 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
       description:
         "Read-only escape hatch for any GET endpoint not covered by other tools. " +
         "api=official: path under /proxy/network/integration, e.g. /v1/sites/{siteId}/vpn/servers ({siteId} is substituted). " +
-        "api=internal: path under /proxy/network/api/s/<site>, e.g. /stat/health, /stat/sysinfo, /rest/portforward, /stat/event. " +
+        "api=internal: classic API under /proxy/network/api/s/<site>, e.g. /stat/health, /stat/sysinfo, /rest/portforward, /stat/event. " +
+        "api=internal-v2: newer internal API under /proxy/network/v2/api/site/<site>, e.g. /clients/active, /traffic-flow-latest-statistics?period=DAY&top=10. " +
+        "Paths cannot contain . or .. segments. " +
         "List responses are paged: use `fields` to keep only the keys you need (dot paths allowed) and `match` to filter items, " +
         "then follow nextOffset. Responses are capped at about 60,000 characters.",
       input: {
-        api: z.enum(["official", "internal"]),
+        api: z.enum(["official", "internal", "internal-v2"]),
         path: z.string().startsWith("/"),
         fields: z
           .array(z.string())
@@ -321,6 +323,9 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
       if (api === "official") {
         const site = await ctx.integration.resolveSite();
         data = await ctx.integration.request(path.replace("{siteId}", site.id));
+      } else if (api === "internal-v2") {
+        // v2 responses are bare arrays or objects, not the classic {meta, data} envelope.
+        data = await ctx.legacy.requestV2(path);
       } else {
         data = await ctx.legacy.request(path);
       }

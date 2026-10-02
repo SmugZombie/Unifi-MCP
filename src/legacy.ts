@@ -1,4 +1,4 @@
-import { HttpTransport, UnifiApiError, type RequestOptions } from "./http.js";
+import { HttpTransport, UnifiApiError, safeJoin, type RequestOptions } from "./http.js";
 
 interface LegacyEnvelope<T> {
   meta: { rc: "ok" | "error"; msg?: string };
@@ -122,7 +122,7 @@ export class LegacyApiClient {
 
   /** Classic API under /api/s/{site}; unwraps the {meta, data} envelope. */
   async request<T = unknown>(subPath: string, opts: RequestOptions = {}): Promise<T[]> {
-    const path = `/proxy/network/api/s/${await this.siteRef()}${subPath}`;
+    const path = safeJoin(`/proxy/network/api/s/${await this.siteRef()}`, subPath);
     const env = (await this.authed(path, opts)) as LegacyEnvelope<T>;
     if (env?.meta?.rc === "error") {
       const method = opts.method ?? "GET";
@@ -133,7 +133,7 @@ export class LegacyApiClient {
 
   /** Newer internal API under /v2/api/site/{site} (traffic flows, etc.); returns the raw JSON. */
   async requestV2<T = unknown>(subPath: string, opts: RequestOptions = {}): Promise<T> {
-    const path = `/proxy/network/v2/api/site/${await this.siteRef()}${subPath}`;
+    const path = safeJoin(`/proxy/network/v2/api/site/${await this.siteRef()}`, subPath);
     return (await this.authed(path, opts)) as T;
   }
 

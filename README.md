@@ -170,7 +170,7 @@ claude mcp add unifi \
 - `unifi_flow_statistics`: top clients, destinations, apps and blocking policies, and blocked/allowed counts by country and risk, per hour, day, week or month
 - `unifi_list_networks`, `unifi_list_wifi`
 - `unifi_list_firewall_zones`, `unifi_list_firewall_policies`, `unifi_get_firewall_policy`, `unifi_get_firewall_policy_order`
-- `unifi_api_get`: read-only access to any other endpoint, with paging, `fields` selection and `match` filtering for large lists
+- `unifi_api_get`: read-only access to any other endpoint on the official, classic internal (`internal`) or newer internal (`internal-v2`) API, with paging, `fields` selection and `match` filtering for large lists. Paths with `.` or `..` segments are refused.
 
 **Write** (not registered when `UNIFI_READ_ONLY=true`)
 - `unifi_block_client`, `unifi_unblock_client`, `unifi_reconnect_client`, `unifi_rename_client`

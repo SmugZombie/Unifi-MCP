@@ -83,6 +83,7 @@ const fake = createServer(async (req, res) => {
       lastFlowQuery = b;
       return json(200, { data: [flow], has_next: true, page_number: b.pageNumber, total_element_count: 120, total_page_count: 3 });
     }
+    if (sub === "/clients/active") return json(200, [{ mac: "aa:bb:cc:dd:ee:02", idletime: 3 }, { mac: "aa:bb:cc:dd:ee:03", idletime: 0 }]);
     if (sub === "/traffic-flows/f1") return json(200, { ...flow, flow_start_time: 1790927990000 });
     if (sub === "/traffic-flow-latest-statistics") {
       return json(200, {
@@ -233,6 +234,22 @@ test("traffic flows: query body, client resolution, summaries", async () => {
   assert.equal(st.top_all_count_by_client[0].client, "NAS");
   assert.equal(st.top_all_count_by_client[0].icon_filename, undefined);
   assert.ok(requests.includes("GET /proxy/network/v2/api/site/default/traffic-flow-latest-statistics"));
+});
+
+test("path traversal is refused before any request is sent", async () => {
+  const before = requests.length;
+  await assert.rejects(call("unifi_api_get", { api: "internal", path: "/../../../v2/api/site/default/clients/active" }), /Invalid API path/);
+  await assert.rejects(call("unifi_api_get", { api: "internal", path: "/stat/%2e%2e/%2e%2e/%2e%2e/%2e%2e/api/users" }), /Invalid API path/);
+  await assert.rejects(call("unifi_api_get", { api: "official", path: "/v1/../../../api/users" }), /Invalid API path/);
+  await assert.rejects(call("unifi_get_device", { deviceId: "../../../../api/users" }), /Invalid API path/);
+  await assert.rejects(call("unifi_get_firewall_policy", { policyId: "..%2f..%2f..%2fapi" }), /Invalid API path/);
+  assert.equal(requests.slice(before).filter((r) => r.includes("/api/users") || !r.includes("/v1/sites")).length, 0, "nothing escaped to the console");
+});
+
+test("raw GET supports v2 endpoints that return bare arrays", async () => {
+  const r = await call("unifi_api_get", { api: "internal-v2", path: "/clients/active", fields: ["mac", "idletime"] });
+  assert.equal(r.total, 2);
+  assert.deepEqual(r.items[0], { mac: "aa:bb:cc:dd:ee:02", idletime: 3 });
 });
 
 test("raw GET pages and projects list responses", async () => {

@@ -1,4 +1,4 @@
-import { HttpTransport, UnifiApiError, type RequestOptions } from "./http.js";
+import { HttpTransport, UnifiApiError, safeJoin, type RequestOptions } from "./http.js";
 
 /** Paged response envelope used by every list endpoint of the official API. */
 interface Page<T> {
@@ -38,7 +38,7 @@ export class IntegrationClient {
     if (!this.apiKey) {
       throw new Error("This tool needs the official UniFi API: set UNIFI_API_KEY.");
     }
-    const fullPath = `/proxy/network/integration${path}`;
+    const fullPath = safeJoin("/proxy/network/integration", path);
     const method = opts.method ?? "GET";
     const res = await this.http.raw(fullPath, { ...opts, headers: { ...opts.headers, "X-API-KEY": this.apiKey } });
     return (await HttpTransport.decode(res, method, fullPath)) as T;
