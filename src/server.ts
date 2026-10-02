@@ -5,6 +5,7 @@ import { registerFirewallTools } from "./tools/firewall.js";
 import { registerFlowTools } from "./tools/flows.js";
 import { registerGatewayTools } from "./tools/gateway.js";
 import { registerNetworkTools } from "./tools/network.js";
+import { registerProfileTools } from "./tools/profiles.js";
 import { registerReachabilityTools } from "./tools/reachability.js";
 import { registerUsageTools } from "./tools/usage.js";
 
@@ -19,6 +20,7 @@ Guidelines:
 - For "can X reach Y" questions use unifi_check_reachability instead of reasoning over policy lists by hand; pass port/protocol when known, and \`at\` to check a scheduled time.
 - To summarise many flows (top source IPs, countries, ports, clients) use unifi_flow_top rather than paging unifi_list_flows.
 - For temporary restrictions use expiries: unifi_block_client(untilTime="06:00") removes a device from the network; unifi_block_internet keeps it on the LAN but cuts internet. Times are in the console's timezone. Tell the user when the block will lift.
+- To keep a device on a restricted network and speed group even when it rejoins under a new randomized MAC, use device profiles (unifi_set_device_profile, matched by hostname); a watcher re-applies them on a timer. Preview with dryRun=true first.
 - Avoid dumping large raw lists with unifi_api_get; pass \`fields\` and \`match\`, and follow nextOffset.
 - Resolve vague references first: use unifi_list_clients(search=...) to find a device by name, vendor or IP, and unifi_list_firewall_zones / unifi_list_networks before writing firewall policies.
 - Before any change, state exactly what will change and confirm with the user. For firewall changes, call with dryRun=true first and show the summary.
@@ -37,5 +39,6 @@ export function createMcpServer(ctx: UnifiContext): McpServer {
   registerUsageTools(server, ctx);
   registerGatewayTools(server, ctx);
   registerReachabilityTools(server, ctx);
+  registerProfileTools(server, ctx);
   return server;
 }
