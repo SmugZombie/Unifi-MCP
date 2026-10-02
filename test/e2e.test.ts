@@ -50,6 +50,10 @@ const users = [
   { _id: "u3", mac: "aa:bb:cc:dd:ee:03", name: "NAS", oui: "Synology", ip: "10.0.0.5", fixed_ip: "10.0.0.5", use_fixedip: true, network: "Default", is_wired: true, "wired-tx_bytes-r": 250000, "wired-rx_bytes-r": 1000, "wired-tx_bytes": 1e9, "wired-rx_bytes": 1e6, uptime: 7200 },
 ];
 const requests: string[] = [];
+// A kid's PC that rejoins Wi-Fi under a new MAC; only present while a test switches it on.
+const roamer: any = { _id: "u4", mac: "fa:bb:cc:dd:ee:04", hostname: "DESKTOP-KID", essid: "Home", network: "Default", network_id: "c1" };
+let roamerOnline = false;
+const kicked: string[] = [];
 let lastFlowQuery: any;
 let lastReportQuery: any;
 let flowPagesServed = 0;
@@ -86,14 +90,19 @@ const fake = createServer(async (req, res) => {
     if (req.method !== "GET" && req.headers["x-csrf-token"] !== "csrf1") return json(403, { meta: { rc: "error", msg: "csrf" } });
     const sub = p.slice("/proxy/network/api/s/default".length);
     const env = (data: unknown[]) => json(200, { meta: { rc: "ok" }, data });
-    if (sub === "/rest/user") return env(users.map((u) => ({ ...u, blocked: blocked.has(u.mac) })));
-    if (sub === "/stat/sta") return env([users[1], users[2]]);
+    if (sub === "/rest/user") return env([...users, ...(roamerOnline ? [roamer] : [])].map((u) => ({ ...u, blocked: blocked.has(u.mac) })));
+    if (sub === "/stat/sta") return env([users[1], users[2], ...(roamerOnline ? [roamer] : [])]);
     if (sub === "/cmd/stamgr") {
       if (b.cmd === "block-sta") blocked.add(b.mac);
       if (b.cmd === "unblock-sta") blocked.delete(b.mac);
+      if (b.cmd === "kick-sta") kicked.push(b.mac);
       return env([]);
     }
-    if (sub.startsWith("/rest/user/")) return env([]);
+    if (sub.startsWith("/rest/user/")) {
+      if (req.method === "PUT" && sub === "/rest/user/u4") Object.assign(roamer, b);
+      return env([]);
+    }
+    if (sub === "/rest/usergroup") return env([{ _id: "g0", name: "Default" }, { _id: "g1", name: "Kids", qos_rate_max_down: 45000 }]);
     if (sub === "/stat/sysinfo") return env([{ timezone: "America/Phoenix" }]);
     if (sub === "/rest/networkconf") return env(networkconf);
     if (sub === "/rest/wlanconf") return env([{ _id: "w1", name: "Home", l2_isolation: homeSsidIsolated }]);
@@ -216,6 +225,8 @@ function serverEnv(): Record<string, string> {
     UNIFI_AUDIT_LOG: auditLog,
     UNIFI_STATE_FILE: join(dirname(auditLog), "scheduled.json"),
     UNIFI_SCHEDULER_INTERVAL_MS: "200",
+    UNIFI_PROFILES_FILE: join(dirname(auditLog), "profiles.json"),
+    UNIFI_WATCH_INTERVAL_MS: "200",
   };
 }
 
@@ -612,4 +623,38 @@ test("reachability: zones, policy order, ports, blocked clients, same network, i
     await call("unifi_unblock_client", { mac: "aa:bb:cc:dd:ee:03" });
   }
   await assert.rejects(call("unifi_check_reachability", { from: "NAS", to: "172.31.9.9" }), /not in any configured network/);
+});
+
+test("device profile: a new MAC is moved to its network and speed group by the watcher", async () => {
+  await assert.rejects(call("unifi_set_device_profile", { name: "KidPC", hostnames: ["DESKTOP-KID"] }), /network and\/or a speedGroup/);
+  await assert.rejects(call("unifi_set_device_profile", { name: "KidPC", hostnames: ["DESKTOP-KID"], network: "Internet 1" }), /Unknown network "Internet 1". Known networks: Default, IoT VLAN/);
+  await assert.rejects(call("unifi_set_device_profile", { name: "KidPC", hostnames: ["DESKTOP-KID"], speedGroup: "Teens" }), /Known speed groups: Default, Kids/);
+
+  roamerOnline = true;
+  const dry = await call("unifi_set_device_profile", { name: "KidPC", hostnames: ["desktop-kid"], network: "IoT VLAN", speedGroup: "Kids", dryRun: true });
+  assert.deepEqual(dry.wouldChangeNow.map((c: any) => c.mac), ["fa:bb:cc:dd:ee:04"]);
+  assert.equal((await call("unifi_list_device_profiles")).profiles.length, 0, "dry run saves nothing");
+  assert.equal(roamer.usergroup_id, undefined);
+
+  const saved = await call("unifi_set_device_profile", { name: "KidPC", hostnames: ["desktop-kid"], network: "IoT VLAN", speedGroup: "Kids" });
+  assert.equal(saved.profile.network, "IoT VLAN");
+  // The watcher (200 ms in tests) picks it up without being asked.
+  await waitFor(() => kicked.includes("fa:bb:cc:dd:ee:04"));
+  assert.equal(roamer.virtual_network_override_enabled, true);
+  assert.equal(roamer.virtual_network_override_id, "c2");
+  assert.equal(roamer.usergroup_id, "g1");
+  assert.equal(roamer.name, "KidPC - MAC ee:04");
+
+  await waitFor(() => readFileSync(auditLog, "utf8").includes('"action":"profile_applied"'));
+  const again = await call("unifi_run_device_profiles", {});
+  assert.deepEqual(again.changes, [], "already compliant");
+  assert.equal(kicked.length, 1, "not kicked again");
+  const listed = await call("unifi_list_device_profiles");
+  assert.equal(listed.watcher.running, true);
+  assert.equal(listed.recentChanges[0].mac, "fa:bb:cc:dd:ee:04");
+  assert.equal(listed.recentChanges[0].reconnected, true);
+
+  await call("unifi_delete_device_profile", { profile: "kidpc" });
+  assert.equal((await call("unifi_list_device_profiles")).profiles.length, 0);
+  roamerOnline = false;
 });

@@ -218,6 +218,7 @@ Notes:
 - `unifi_list_port_forwards`: port-forward rules with target device names
 - `unifi_wan_health`: WAN status, ISP, latency, drops, per-WAN availability and probes, last speed test, current throughput, gateway CPU/memory
 - `unifi_list_scheduled_actions`: pending automatic undos from timed blocks
+- `unifi_list_device_profiles`: device profiles, the watcher's interval and last run, and the changes it made recently
 - `unifi_flow_statistics`: top clients, destinations, apps and blocking policies, and blocked/allowed counts by country and risk, per hour, day, week or month
 - `unifi_list_networks`, `unifi_list_wifi`
 - `unifi_list_firewall_zones`, `unifi_list_firewall_policies`, `unifi_get_firewall_policy`, `unifi_get_firewall_policy_order`
@@ -228,6 +229,7 @@ Notes:
 - `unifi_block_client` (optionally timed: `durationMinutes`, `untilTime: "06:00"` in the console's timezone, or `until`), `unifi_unblock_client`, `unifi_reconnect_client`, `unifi_rename_client`
 - `unifi_block_internet`: cut internet access for devices while they stay on the LAN, optionally until a time; creates a temporary BLOCK policy per zone and removes it at expiry
 - `unifi_cancel_scheduled_action`: lift a timed block early, or keep it indefinitely
+- `unifi_set_device_profile`, `unifi_delete_device_profile`, `unifi_run_device_profiles`: keep a device, recognised by hostname, on a chosen Wi-Fi network and speed-limit group even when it rejoins under a new randomized MAC (see [Device profiles](#device-profiles))
 - `unifi_create_firewall_policy`, `unifi_update_firewall_policy`, `unifi_set_firewall_policy_enabled`, `unifi_delete_firewall_policy`, `unifi_move_firewall_policy`
 - `unifi_restart_device`, `unifi_power_cycle_port`
 
@@ -243,11 +245,22 @@ Firewall tools accept **zone and network names** ("IoT", "External") as well as 
 - "What's our average internet bandwidth this week, and when was the busiest hour?"
 - "Which countries and ports is blocked inbound traffic coming from today?"
 - "Turn off internet for the kids' iPads until 6 AM."
+- "Keep the PC called DESKTOP-KIDPC on the Kids network at the Kids speed limit, even if it changes its MAC address."
 - "Can the guest network reach my NAS? And can my kid's phone reach the internet right now?"
 - "Block the device called *ESP_3A1F2C* and note it as unknown."
 - "Create a firewall policy so the IoT zone can't reach Internal, except my Home Assistant at 10.0.0.20 on port 8123. Show me a dry run first."
 - "Block inbound traffic from CN and RU to my port-forwarded services."
 - "Disable the 'Kids bedtime' policy."
+
+### Device profiles
+
+A device that rejoins Wi-Fi under a new randomized MAC address looks like a brand-new client, so it lands on the SSID's default network without its speed limit. A device profile recognises it by hostname instead and puts it back:
+
+- `unifi_set_device_profile` saves a profile: one or more hostnames, a network to force the device onto (the controller's Wi-Fi network override) and/or a speed-limit group. `dryRun: true` previews which connected clients would change.
+- A watcher in the server checks connected clients every 5 minutes (`UNIFI_WATCH_INTERVAL_MS`). For a matching client that lacks the settings it updates the client record, names it after the profile if it has no name, and disconnects it once so it rejoins on the right network. Clients that already comply are left alone.
+- `unifi_run_device_profiles` runs the check immediately; `unifi_list_device_profiles` shows the profiles, the last run and recent changes. Every change is written to the audit log as `profile_applied`.
+
+Profiles are stored in `UNIFI_PROFILES_FILE` (default `profiles.json` next to the scheduled-actions file). The watcher does not run when `UNIFI_READ_ONLY=true`. Limits: matching is by hostname, so renaming the device defeats it; the network override applies to Wi-Fi clients only (wired clients get the speed group); and a new MAC is unrestricted until the next check.
 
 ## Safety
 

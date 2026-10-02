@@ -8,6 +8,7 @@ import type { Json, Lookups } from "./firewall.js";
 import { HttpTransport } from "./http.js";
 import { IntegrationClient } from "./integration.js";
 import { LegacyApiClient, normalizeMac } from "./legacy.js";
+import { ProfileStore, ProfileWatcher } from "./profiles.js";
 import { Scheduler, type ScheduledJob } from "./scheduler.js";
 
 export interface Zone {
@@ -30,6 +31,8 @@ export class UnifiContext {
   readonly integration: IntegrationClient;
   readonly legacy: LegacyApiClient;
   readonly scheduler: Scheduler;
+  readonly profiles: ProfileStore;
+  readonly watcher: ProfileWatcher;
   private cache = new Map<string, { at: number; value: unknown }>();
 
   constructor(readonly config: Config) {
@@ -40,6 +43,21 @@ export class UnifiContext {
       this.integration.available ? (await this.integration.resolveSite()).internalReference : config.site,
     );
     this.scheduler = new Scheduler(config.stateFile, (job) => this.runScheduled(job), config.schedulerIntervalMs);
+    this.profiles = new ProfileStore(config.profilesFile);
+    this.watcher = new ProfileWatcher(
+      this.profiles,
+      {
+        activeClients: () => this.legacy.activeClients(),
+        knownClients: () => this.legacy.knownClients(),
+        updateClient: (id, body) => this.legacy.updateClient(id, body),
+        kick: (mac) => this.legacy.kick(mac),
+        audit: async (action, details) => {
+          this.invalidate();
+          await this.audit(action, details);
+        },
+      },
+      config.watchIntervalMs,
+    );
   }
 
   /** Perform a scheduled undo. Must be idempotent (see Scheduler). */
