@@ -10,6 +10,7 @@ async function main() {
   if (!config.verifyTls) console.error("unifi-mcp: TLS certificate verification is disabled (UNIFI_VERIFY_TLS=false)");
   const ctx = new UnifiContext(config);
   ctx.scheduler.start();
+  if (!config.readOnly) ctx.watcher.start();
   const target = `${config.host} (site "${config.site}"${config.readOnly ? ", read-only" : ""})`;
 
   if (config.transport.kind === "http") {
