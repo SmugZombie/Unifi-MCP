@@ -18,7 +18,7 @@
     "test": "tsc && node --import tsx --test test/*.test.ts"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19"
   },
   "license": "MIT",
   "dependencies": {
