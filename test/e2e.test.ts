@@ -28,11 +28,12 @@ let ordering: string[] = [];
 const blocked = new Set<string>();
 const users = [
   { _id: "u1", mac: "aa:bb:cc:dd:ee:01", hostname: "living-room-tv", oui: "Samsung", last_ip: "10.0.30.20", blocked: false },
-  { _id: "u2", mac: "aa:bb:cc:dd:ee:02", name: "Alex iPhone", oui: "Apple", ip: "10.0.0.15", essid: "Home", "tx_bytes-r": 125000, "rx_bytes-r": 12500, tx_bytes: 5e8, rx_bytes: 2e7, uptime: 3600 },
+  { _id: "u2", mac: "aa:bb:cc:dd:ee:02", name: "Alex iPhone", oui: "Apple", ip: "10.0.0.15", essid: "Home", idletime: 12, "tx_bytes-r": 125000, "rx_bytes-r": 12500, tx_bytes: 5e8, rx_bytes: 2e7, uptime: 3600 },
   { _id: "u3", mac: "aa:bb:cc:dd:ee:03", name: "NAS", oui: "Synology", ip: "10.0.0.5", is_wired: true, "wired-tx_bytes-r": 250000, "wired-rx_bytes-r": 1000, "wired-tx_bytes": 1e9, "wired-rx_bytes": 1e6, uptime: 7200 },
 ];
 const requests: string[] = [];
 let lastFlowQuery: any;
+let lastReportQuery: any;
 const flow = {
   id: "f1", time: 1790928000000, action: "blocked", direction: "outgoing", risk: "low", protocol: "TCP", service: "HTTPS", count: 1,
   source: { ip: "10.0.0.5", port: 50000, mac: "aa:bb:cc:dd:ee:03" },
@@ -74,6 +75,14 @@ const fake = createServer(async (req, res) => {
       return env([]);
     }
     if (sub.startsWith("/rest/user/")) return env([]);
+    if (sub === "/stat/report/hourly.site" && req.method === "POST") {
+      lastReportQuery = b;
+      const t0 = Math.floor(b.start / 3600000) * 3600000;
+      return env([
+        { time: t0, "wan-rx_bytes": 450e6, "wan-tx_bytes": 45e6, num_sta: 40 },
+        { time: t0 + 3600000, "wan-rx_bytes": 900e6, "wan-tx_bytes": 90e6, num_sta: 42 },
+      ]);
+    }
     return json(404, { meta: { rc: "error", msg: "not found" } });
   }
   if (p.startsWith("/proxy/network/v2/api/site/default/")) {
@@ -82,6 +91,19 @@ const fake = createServer(async (req, res) => {
     if (sub === "/traffic-flows" && req.method === "POST") {
       lastFlowQuery = b;
       return json(200, { data: [flow], has_next: true, page_number: b.pageNumber, total_element_count: 120, total_page_count: 3 });
+    }
+    if (sub === "/traffic") {
+      const app = (category: number, application: number, rx: number, tx: number) => ({ category, application, bytes_received: rx, bytes_transmitted: tx, total_bytes: rx + tx, activity_seconds: 600 });
+      return json(200, {
+        total_usage_by_app: [
+          { ...app(4, 112, 8e9, 1e8), client_count: 2 },
+          { ...app(1, 2, 2e9, 5e8), client_count: 1 },
+        ],
+        client_usage_by_app: [
+          { client: { mac: "aa:bb:cc:dd:ee:02", name: "Alex iPhone", oui: "Apple" }, usage_by_app: [app(4, 112, 3e9, 5e7)] },
+          { client: { mac: "aa:bb:cc:dd:ee:03", hostname: "nas", oui: "Synology", is_wired: true }, usage_by_app: [app(4, 112, 5e9, 5e7), app(1, 2, 2e9, 5e8)] },
+        ],
+      });
     }
     if (sub === "/clients/active") return json(200, [{ mac: "aa:bb:cc:dd:ee:02", idletime: 3 }, { mac: "aa:bb:cc:dd:ee:03", idletime: 0 }]);
     if (sub === "/traffic-flows/f1") return json(200, { ...flow, flow_start_time: 1790927990000 });
@@ -105,8 +127,8 @@ const fake = createServer(async (req, res) => {
   if (ip === `${s}/devices`) return page([{ id: "d1", name: "UDM", state: "ONLINE", firmwareUpdatable: false }]);
   if (ip === `${s}/clients`) return page([{ id: "c1", name: "Alex iPhone" }]);
   if (ip === `${s}/wans`) return page([]);
-  if (ip === "/v1/dpi/applications") return page([{ id: (4 << 16) | 112, name: "Youtube" }, { id: 112, name: "Wrong app" }]);
-  if (ip === "/v1/dpi/categories") return page([{ id: 4, name: "Media streaming services" }]);
+  if (ip === "/v1/dpi/applications") return page([{ id: (4 << 16) | 112, name: "Youtube" }, { id: 112, name: "Wrong app" }, { id: (1 << 16) | 2, name: "BitTorrent Series" }]);
+  if (ip === "/v1/dpi/categories") return page([{ id: 4, name: "Media streaming services" }, { id: 1, name: "Peer-to-peer networks" }]);
   if (ip === `${s}/firewall/policies` && req.method === "GET") return page(policies);
   if (ip === `${s}/firewall/policies` && req.method === "POST") {
     const created = { ...b, id: `p-${policies.length}`, index: 100 + policies.length, metadata: { origin: "USER_DEFINED" } };
@@ -192,6 +214,8 @@ test("client traffic: rates, sorting and full details", async () => {
   assert.deepEqual(r.clients[0].traffic, { downKbps: 2000, upKbps: 8, totalDownMB: 1000, totalUpMB: 1 });
   assert.deepEqual(r.clients[1].traffic, { downKbps: 1000, upKbps: 100, totalDownMB: 500, totalUpMB: 20 });
   assert.equal(r.clients[1].uptimeSec, 3600);
+  assert.equal(r.clients[1].idleSec, 12);
+  assert.equal(r.clients[0].idleSec, undefined, "wired clients report no idle time");
 
   const p1 = await call("unifi_list_clients", { status: "all", limit: 2 });
   assert.equal(p1.total, 3);
@@ -250,6 +274,45 @@ test("raw GET supports v2 endpoints that return bare arrays", async () => {
   const r = await call("unifi_api_get", { api: "internal-v2", path: "/clients/active", fields: ["mac", "idletime"] });
   assert.equal(r.total, 2);
   assert.deepEqual(r.items[0], { mac: "aa:bb:cc:dd:ee:02", idletime: 3 });
+});
+
+test("usage: traffic by app and client, DPI lookup, WAN report", async () => {
+  const apps = await call("unifi_traffic_by_app", { lastDays: 7 });
+  assert.deepEqual(apps.apps.map((a: any) => a.app), ["Youtube", "BitTorrent Series"]);
+  assert.equal(apps.apps[0].downMB, 8000);
+  assert.equal(apps.apps[0].share, "76.4%", "8.1 GB of 10.6 GB");
+
+  const torrent = await call("unifi_traffic_by_app", { lastDays: 30, app: "torrent" });
+  assert.deepEqual(torrent.apps.map((a: any) => a.app), ["BitTorrent Series"]);
+  assert.deepEqual(torrent.apps[0].topClients.map((c: any) => c.name), ["NAS"]);
+
+  const clients = await call("unifi_traffic_by_app", { view: "clients" });
+  assert.deepEqual(clients.clients.map((c: any) => c.name), ["NAS", "Alex iPhone"], "hostname-only clients get their known name");
+  const one = await call("unifi_traffic_by_app", { client: "Alex iPhone" });
+  assert.equal(one.clients.length, 1);
+  assert.equal(one.clients[0].topApps[0].app, "Youtube");
+
+  const lookup = await call("unifi_lookup_dpi", { query: "torrent", ids: [{ category: 4, application: 112 }] });
+  assert.equal(lookup.results[0].name, "Youtube");
+  assert.ok(lookup.results.some((r: any) => r.name === "BitTorrent Series" && r.category === 1 && r.application === 2));
+
+  const wan = await call("unifi_wan_usage", { lastHours: 48 });
+  assert.equal(wan.granularity, "hourly");
+  assert.deepEqual(lastReportQuery.attrs.slice(0, 2), ["wan-rx_bytes", "wan-tx_bytes"]);
+  assert.equal(lastReportQuery.end - lastReportQuery.start, 48 * 3_600_000);
+  assert.deepEqual(wan.totals, { downGB: 1.35, upGB: 0.14 });
+  assert.equal(wan.peakInterval.down.mbps, 2, "900 MB in an hour = 2 Mbps");
+  assert.equal(wan.rows.length, 2);
+  await assert.rejects(call("unifi_wan_usage", { lastHours: 48, granularity: "5min" }), /only covers/);
+});
+
+test("raw API POST is limited to read-only query endpoints", async () => {
+  const ok = await call("unifi_api_get", { api: "internal", path: "/stat/report/hourly.site", body: { attrs: ["wan-rx_bytes"], start: 0, end: 7200000 } });
+  assert.equal(ok.total, 2);
+  for (const [api, path] of [["internal", "/cmd/stamgr"], ["internal", "/rest/user"], ["internal-v2", "/traffic-flows/f1"], ["official", "/v1/sites"]]) {
+    await assert.rejects(call("unifi_api_get", { api, path, body: { cmd: "block-sta" } }), /only allowed for read-only/, `${api} ${path}`);
+  }
+  assert.ok(!blocked.size, "nothing was blocked");
 });
 
 test("raw GET pages and projects list responses", async () => {

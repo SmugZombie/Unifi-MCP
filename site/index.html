@@ -300,7 +300,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
           <!-- Server -->
           <rect class="d-box hl" x="320" y="70" width="230" height="190" rx="12"/>
           <text class="d-title" x="435" y="104" text-anchor="middle">UniFi MCP server</text>
-          <text class="d-sub" x="435" y="132" text-anchor="middle">26 tools with schemas</text>
+          <text class="d-sub" x="435" y="132" text-anchor="middle">29 tools with schemas</text>
           <text class="d-sub" x="435" y="152" text-anchor="middle">Name → ID resolution</text>
           <text class="d-sub" x="435" y="172" text-anchor="middle">Firewall policy builder</text>
           <text class="d-sub" x="435" y="192" text-anchor="middle">Dry runs and guard rails</text>
@@ -348,7 +348,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
           <tbody>
             <tr><td>Devices, networks, Wi-Fi, firewall zones and policies, policy ordering, device restart, PoE power-cycle</td><td>Official Network API<br><code>/proxy/network/integration/v1</code></td><td>API key</td></tr>
             <tr><td>Client search including offline clients, block, unblock, reconnect, rename</td><td>Internal API<br><code>/proxy/network/api/s/&lt;site&gt;</code></td><td>API key, with automatic fallback to a local admin login</td></tr>
-            <tr><td>Traffic flow logs and flow statistics</td><td>Internal v2 API<br><code>/proxy/network/v2/api/site/&lt;site&gt;</code></td><td>API key, with automatic fallback to a local admin login</td></tr>
+            <tr><td>Traffic flow logs, flow statistics, usage by app and client</td><td>Internal v2 API<br><code>/proxy/network/v2/api/site/&lt;site&gt;</code></td><td>API key, with automatic fallback to a local admin login</td></tr>
           </tbody>
         </table>
       </div>
@@ -368,6 +368,9 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
             <tr><td><code>unifi_list_clients</code></td><td>Connected, all or blocked clients; search by name, vendor, IP or partial MAC; live download/upload rates; sort by traffic</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_get_client</code></td><td>Every field the controller has for one device</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_list_flows</code> / <code>unifi_get_flow</code></td><td>Traffic flow logs: who connected to what, allowed or blocked, by which policy; filter by time, device, IP, port, domain, country or risk</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_traffic_by_app</code></td><td>Data usage by app and by device over hours to a month; who uses an app; what one device uses</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_wan_usage</code></td><td>Internet totals, average Mbps and busiest interval at 5-minute, hourly or daily granularity</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_lookup_dpi</code></td><td>DPI application and category names by ID, or search by name</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_flow_statistics</code></td><td>Top clients, destinations, apps and blocking policies per hour, day, week or month</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_list_networks</code> / <code>unifi_list_wifi</code></td><td>VLANs, subnets and SSIDs</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_list_firewall_zones</code></td><td>Zones and the networks in each</td><td><span class="tag read">read</span></td></tr>
@@ -391,6 +394,8 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
         <div class="prompt">Which devices are using the most bandwidth right now?</div>
         <div class="prompt">What has the living-room TV been connecting to in the last hour?</div>
         <div class="prompt">What got blocked overnight, and by which policies?</div>
+        <div class="prompt">Which device is using BitTorrent, and how much did it download this month?</div>
+        <div class="prompt">What's our average internet bandwidth this week, and when was the busiest hour?</div>
         <div class="prompt">Which APs or switches need a firmware update?</div>
         <div class="prompt">Block the device called ESP_3A1F2C and note it as unknown.</div>
         <div class="prompt">Make sure the IoT network can't reach my main LAN, except Home Assistant on port 8123.</div>

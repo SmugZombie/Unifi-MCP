@@ -7,7 +7,7 @@ import type { Config } from "./config.js";
 import type { Json, Lookups } from "./firewall.js";
 import { HttpTransport } from "./http.js";
 import { IntegrationClient } from "./integration.js";
-import { LegacyApiClient } from "./legacy.js";
+import { LegacyApiClient, normalizeMac } from "./legacy.js";
 
 export interface Zone {
   id: string;
@@ -80,6 +80,35 @@ export class UnifiContext {
         throw err;
       });
     return this.dpi;
+  }
+
+  /** MAC → friendly name from the controller's known clients (best effort, never throws). */
+  async clientNames(): Promise<(mac?: string) => string | undefined> {
+    try {
+      const known = await this.cached("knownClients", () => this.legacy.knownClients());
+      const map = new Map(known.map((c) => [c.mac, c.name || c.hostname]));
+      return (mac) => (mac ? map.get(mac.toLowerCase()) || undefined : undefined);
+    } catch {
+      return () => undefined;
+    }
+  }
+
+  /** Resolve a client name, hostname, IP or MAC to MAC addresses (several for randomized MACs or partial names). */
+  async resolveClientMacs(query: string): Promise<string[]> {
+    try {
+      return [normalizeMac(query)];
+    } catch {
+      // Not a MAC; search known clients.
+    }
+    const q = query.toLowerCase();
+    const known = await this.cached("knownClients", () => this.legacy.knownClients());
+    const exact = known.filter((c) => [c.name, c.hostname, c.ip, c.last_ip].some((v) => v && String(v).toLowerCase() === q));
+    const hits = exact.length
+      ? exact
+      : known.filter((c) => [c.name, c.hostname, c.oui].some((v) => v && String(v).toLowerCase().includes(q)));
+    if (!hits.length) throw new Error(`No client matches "${query}". Use unifi_list_clients with search to find it.`);
+    if (hits.length > 10) throw new Error(`"${query}" matches ${hits.length} clients; be more specific or pass a MAC address.`);
+    return hits.map((c) => c.mac);
   }
 
   /** Name/ID resolvers for zones and networks, so tools can accept "IoT" instead of a UUID. */

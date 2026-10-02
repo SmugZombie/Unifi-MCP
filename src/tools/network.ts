@@ -47,6 +47,8 @@ export function summarizeLegacyClient(c: LegacyClient, online: boolean): Json {
     signal: online ? c.signal : undefined,
     traffic: online ? clientTraffic(c) : undefined,
     uptimeSec: online ? num(c.uptime) : undefined,
+    // Seconds since the client last sent traffic; only reported for wireless clients.
+    idleSec: online ? num(c.idletime) : undefined,
     lastSeen,
     note: c.note || undefined,
   };
@@ -60,6 +62,17 @@ function matches(c: Json, needle: string): boolean {
       String(c[k] ?? "").toLowerCase().includes(n),
     ) || (macHex.length >= 4 && String(c.mac).replace(/:/g, "").includes(macHex))
   );
+}
+
+/** POST endpoints that only query data. Anything else must go through a dedicated (audited) write tool. */
+const READ_ONLY_POST = [
+  { api: "internal", label: "/stat/report/*", re: /^\/stat\/report\/[A-Za-z0-9_.-]+$/ },
+  { api: "internal-v2", label: "/traffic-flows", re: /^\/traffic-flows$/ },
+] as const;
+
+export function isReadOnlyQuery(api: string, path: string): boolean {
+  const bare = path.split("?", 1)[0];
+  return READ_ONLY_POST.some((r) => r.api === api && r.re.test(bare));
 }
 
 function pick(item: unknown, fields: string[]): Json {
@@ -188,7 +201,8 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
       title: "List / search clients",
       description:
         "List client devices (phones, laptops, IoT…) with name, hostname, vendor, IP, MAC, network, wifi/wired, blocked status, " +
-        "and for connected clients current traffic (downKbps/upKbps, a per-second snapshot) and totals since connecting (totalDownMB/totalUpMB). " +
+        "and for connected clients current traffic (downKbps/upKbps, a per-second snapshot), totals since connecting (totalDownMB/totalUpMB) " +
+        "and, for Wi-Fi clients, idleSec (seconds since last activity). " +
         "Use `search` to find a client by name, hostname, vendor, IP or partial MAC before blocking or writing a firewall rule for it. " +
         "Use sortBy=traffic to find the busiest devices. For every field of one client, use unifi_get_client.",
       input: {
@@ -304,6 +318,7 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
         "api=internal: classic API under /proxy/network/api/s/<site>, e.g. /stat/health, /stat/sysinfo, /rest/portforward, /stat/event. " +
         "api=internal-v2: newer internal API under /proxy/network/v2/api/site/<site>, e.g. /clients/active, /traffic-flow-latest-statistics?period=DAY&top=10. " +
         "Paths cannot contain . or .. segments. " +
+        "Passing `body` sends a POST, allowed only for read-only query endpoints: internal /stat/report/* and internal-v2 /traffic-flows. " +
         "List responses are paged: use `fields` to keep only the keys you need (dot paths allowed) and `match` to filter items, " +
         "then follow nextOffset. Responses are capped at about 60,000 characters.",
       input: {
@@ -314,20 +329,31 @@ export function registerNetworkTools(server: McpServer, ctx: UnifiContext): void
           .optional()
           .describe('Keys to keep from each list item, e.g. ["mac","hostname","tx_bytes-r","rx_bytes-r"] or ["uplink.name"]'),
         match: z.string().optional().describe("Keep only list items whose JSON contains this text (case-insensitive)"),
+        body: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe("JSON body; turns the request into a POST (read-only query endpoints only, see description)"),
         offset: z.number().int().min(0).default(0),
         limit: z.number().int().min(1).max(1000).default(100),
       },
     },
-    async ({ api, path, fields, match, offset, limit }) => {
+    async ({ api, path, fields, match, body, offset, limit }) => {
+      const opts = body ? { method: "POST", body } : {};
+      if (body && !isReadOnlyQuery(api, path)) {
+        throw new Error(
+          `POST is only allowed for read-only query endpoints (${READ_ONLY_POST.map((r) => `${r.api} ${r.label}`).join(", ")}); ` +
+            "use the dedicated tools for changes.",
+        );
+      }
       let data: unknown;
       if (api === "official") {
         const site = await ctx.integration.resolveSite();
         data = await ctx.integration.request(path.replace("{siteId}", site.id));
       } else if (api === "internal-v2") {
         // v2 responses are bare arrays or objects, not the classic {meta, data} envelope.
-        data = await ctx.legacy.requestV2(path);
+        data = await ctx.legacy.requestV2(path, opts);
       } else {
-        data = await ctx.legacy.request(path);
+        data = await ctx.legacy.request(path, opts);
       }
       return pageResult(data, { fields, match, offset, limit });
     },

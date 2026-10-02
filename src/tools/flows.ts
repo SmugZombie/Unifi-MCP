@@ -2,7 +2,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { defineTool, type UnifiContext } from "../context.js";
 import type { Json } from "../firewall.js";
-import { normalizeMac } from "../legacy.js";
 
 /**
  * Traffic flows (Insights → Flows in the UniFi UI) come from the internal v2 API:
@@ -59,36 +58,8 @@ export function summarizeFlow(f: Json, nameOf: (mac?: string) => string | undefi
 }
 
 export function registerFlowTools(server: McpServer, ctx: UnifiContext): void {
-  /** MAC → friendly name from the controller's known clients (best effort). */
-  async function clientNames(): Promise<(mac?: string) => string | undefined> {
-    try {
-      const known = await ctx.legacy.knownClients();
-      const map = new Map(known.map((c) => [c.mac, c.name || c.hostname]));
-      return (mac) => (mac ? map.get(mac.toLowerCase()) || undefined : undefined);
-    } catch {
-      return () => undefined;
-    }
-  }
-
-  /** Resolve a client name, hostname, IP or MAC to MAC addresses. */
-  async function resolveClient(query: string): Promise<string[]> {
-    try {
-      return [normalizeMac(query)];
-    } catch {
-      // Not a MAC; search known clients.
-    }
-    const q = query.toLowerCase();
-    const known = await ctx.legacy.knownClients();
-    const exact = known.filter((c) => [c.name, c.hostname, c.ip, c.last_ip].some((v) => v && String(v).toLowerCase() === q));
-    const hits = exact.length
-      ? exact
-      : known.filter((c) => [c.name, c.hostname, c.oui].some((v) => v && String(v).toLowerCase().includes(q)));
-    if (!hits.length) throw new Error(`No client matches "${query}". Use unifi_list_clients with search to find it.`);
-    if (hits.length > 10) {
-      throw new Error(`"${query}" matches ${hits.length} clients; be more specific or pass a MAC address.`);
-    }
-    return hits.map((c) => c.mac);
-  }
+  const clientNames = () => ctx.clientNames();
+  const resolveClient = (query: string) => ctx.resolveClientMacs(query);
 
   defineTool(
     server,

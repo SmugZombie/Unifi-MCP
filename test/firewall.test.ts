@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildPolicy, deepMerge, summarizePolicy, type Lookups } from "../src/firewall.ts";
-import { pageResult } from "../src/tools/network.ts";
+import { isReadOnlyQuery, pageResult } from "../src/tools/network.ts";
+import { pickGranularity } from "../src/tools/usage.ts";
 
 const lookups: Lookups = {
   zoneId: (k) => ({ internal: "z-int", external: "z-ext", iot: "z-iot" })[k.toLowerCase()] ?? k,
@@ -96,4 +97,22 @@ test("pageResult shrinks oversized pages instead of cutting JSON", () => {
   const slim = pageResult(big, { offset: 0, limit: 200, fields: ["i"] }) as any;
   assert.equal(slim.returned, 200);
   assert.equal(slim.nextOffset, undefined);
+});
+
+test("WAN report granularity selection", () => {
+  assert.equal(pickGranularity(3, "auto"), "5min");
+  assert.equal(pickGranularity(24, "auto"), "hourly");
+  assert.equal(pickGranularity(168, "auto"), "hourly");
+  assert.equal(pickGranularity(720, "auto"), "daily");
+  assert.equal(pickGranularity(720, "hourly"), "hourly");
+});
+
+test("read-only POST allowlist", () => {
+  assert.ok(isReadOnlyQuery("internal", "/stat/report/daily.site"));
+  assert.ok(isReadOnlyQuery("internal-v2", "/traffic-flows"));
+  assert.ok(!isReadOnlyQuery("internal", "/stat/report"));
+  assert.ok(!isReadOnlyQuery("internal", "/stat/report/x/y"));
+  assert.ok(!isReadOnlyQuery("internal", "/cmd/stamgr"));
+  assert.ok(!isReadOnlyQuery("internal-v2", "/stat/report/daily.site"));
+  assert.ok(!isReadOnlyQuery("official", "/v1/sites"));
 });
