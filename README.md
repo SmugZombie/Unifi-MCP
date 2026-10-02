@@ -160,6 +160,49 @@ claude mcp add unifi \
 }
 ```
 
+## Run as a macOS login service
+
+To keep the HTTP server running without a terminal or Claude session, install it as a LaunchAgent. It starts at login, restarts after a crash (at most every 30 seconds), and logs to `~/Library/Logs/unifi-mcp.log`. The template is in [`deploy/macos/`](deploy/macos/com.unifi-mcp.server.plist).
+
+1. Build, and set the HTTP settings in `.env` (the agent sets `MCP_TRANSPORT=http` itself): `MCP_AUTH_TOKEN` (required), and optionally `MCP_HOST` / `MCP_PORT` (default `127.0.0.1:3000`; use `MCP_HOST=0.0.0.0` only if other machines on your LAN should connect).
+
+   ```sh
+   npm install && npm run build
+   ```
+
+2. Install the agent, filling in your paths:
+
+   ```sh
+   sed -e "s#__NODE__#$(command -v node)#" -e "s#__REPO__#$PWD#g" -e "s#__HOME__#$HOME#g" \
+     deploy/macos/com.unifi-mcp.server.plist > ~/Library/LaunchAgents/com.unifi-mcp.server.plist
+   plutil -lint ~/Library/LaunchAgents/com.unifi-mcp.server.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unifi-mcp.server.plist
+   ```
+
+3. Check it, then connect Claude Code (use your `MCP_PORT`):
+
+   ```sh
+   curl -s http://127.0.0.1:3000/healthz
+   tail ~/Library/Logs/unifi-mcp.log
+   claude mcp add --transport http unifi http://127.0.0.1:3000/mcp \
+     --header "Authorization: Bearer $(grep '^MCP_AUTH_TOKEN=' .env | cut -d= -f2)"
+   ```
+
+Managing it:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.unifi-mcp.server   # restart, e.g. after npm run build
+launchctl bootout gui/$(id -u)/com.unifi-mcp.server        # stop and unload
+launchctl print gui/$(id -u)/com.unifi-mcp.server          # status, PID, last exit
+```
+
+Notes:
+
+- With Homebrew, `command -v node` gives `/opt/homebrew/bin/node`, which keeps working across Node upgrades. A version-manager path (nvm, fnm) changes when you switch versions; re-run step 2 if it does.
+- Run only one server per port. Stop any server started by hand before bootstrapping the agent.
+- The agent reads `.env` at start-up; restart it after editing.
+- If tool calls time out reaching the console, check System Settings → Privacy & Security → Local Network and allow `node`.
+
 ## Tools
 
 **Read**
