@@ -8,6 +8,7 @@ import type { Json, Lookups } from "./firewall.js";
 import { HttpTransport } from "./http.js";
 import { IntegrationClient } from "./integration.js";
 import { LegacyApiClient, normalizeMac } from "./legacy.js";
+import { Scheduler, type ScheduledJob } from "./scheduler.js";
 
 export interface Zone {
   id: string;
@@ -28,6 +29,7 @@ const CACHE_TTL_MS = 30_000;
 export class UnifiContext {
   readonly integration: IntegrationClient;
   readonly legacy: LegacyApiClient;
+  readonly scheduler: Scheduler;
   private cache = new Map<string, { at: number; value: unknown }>();
 
   constructor(readonly config: Config) {
@@ -37,6 +39,42 @@ export class UnifiContext {
       // The internal API addresses sites by their short name ("default").
       this.integration.available ? (await this.integration.resolveSite()).internalReference : config.site,
     );
+    this.scheduler = new Scheduler(config.stateFile, (job) => this.runScheduled(job), config.schedulerIntervalMs);
+  }
+
+  /** Perform a scheduled undo. Must be idempotent (see Scheduler). */
+  private async runScheduled(job: ScheduledJob): Promise<void> {
+    switch (job.action) {
+      case "unblock_client":
+        await this.legacy.unblock(job.args.mac);
+        break;
+      case "delete_firewall_policy":
+        try {
+          await this.integration.siteRequest(`/firewall/policies/${job.args.policyId}`, { method: "DELETE" });
+        } catch (err) {
+          // Already removed (by hand or by another server process) counts as done.
+          if (!IntegrationClient.isNotFound(err)) throw err;
+        }
+        break;
+      default:
+        throw new Error(`Unknown scheduled action ${(job as ScheduledJob).action}`);
+    }
+    this.invalidate();
+    await this.audit(`scheduled_${job.action}`, { job: job.id, label: job.label, args: job.args });
+  }
+
+  private consoleTz?: string;
+
+  /** The console's configured timezone (falls back to this machine's). */
+  async consoleTimezone(): Promise<string> {
+    if (this.consoleTz) return this.consoleTz;
+    try {
+      const [info] = await this.legacy.request<{ timezone?: string }>("/stat/sysinfo");
+      this.consoleTz = info?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      this.consoleTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    }
+    return this.consoleTz;
   }
 
   private async cached<T>(key: string, load: () => Promise<T>): Promise<T> {

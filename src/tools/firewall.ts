@@ -42,6 +42,31 @@ const POLICY_HELP =
   "Zone-based firewall: a policy matches traffic from a source zone to a destination zone (e.g. Internal → External, IoT → Internal). " +
   "Use unifi_list_firewall_zones to see zones. Zone and network names are accepted in place of IDs.";
 
+/** Reorder a user-defined policy within its zone pair (first match wins). */
+export async function movePolicy(
+  ctx: UnifiContext,
+  policyId: string,
+  position: "top" | "bottom" | "before" | "after",
+  relativeTo?: string,
+) {
+  const p = await ctx.integration.siteRequest<Json>(`/firewall/policies/${policyId}`);
+  const query = { sourceFirewallZoneId: p.source.zoneId, destinationFirewallZoneId: p.destination.zoneId };
+  const current = await ctx.integration.siteRequest<Json>("/firewall/policies/ordering", { query });
+  const before: string[] = (current.orderedFirewallPolicyIds?.beforeSystemDefined ?? []).filter((id: string) => id !== policyId);
+  const after: string[] = (current.orderedFirewallPolicyIds?.afterSystemDefined ?? []).filter((id: string) => id !== policyId);
+
+  if (position === "top") before.unshift(policyId);
+  else if (position === "bottom") before.push(policyId);
+  else {
+    if (!relativeTo) throw new Error(`position "${position}" requires relativeTo`);
+    const list = before.includes(relativeTo) ? before : after.includes(relativeTo) ? after : undefined;
+    if (!list) throw new Error(`Policy ${relativeTo} is not a user-defined policy in the same zone pair`);
+    list.splice(list.indexOf(relativeTo) + (position === "after" ? 1 : 0), 0, policyId);
+  }
+  const body = { orderedFirewallPolicyIds: { beforeSystemDefined: before, afterSystemDefined: after } };
+  return ctx.integration.siteRequest<Json>("/firewall/policies/ordering", { method: "PUT", query, body });
+}
+
 export function registerFirewallTools(server: McpServer, ctx: UnifiContext): void {
   const policies = () => ctx.integration.siteList<Json>("/firewall/policies");
   const getPolicy = (id: string) => ctx.integration.siteRequest<Json>(`/firewall/policies/${id}`);
@@ -57,24 +82,8 @@ export function registerFirewallTools(server: McpServer, ctx: UnifiContext): voi
     }
   }
 
-  async function move(policyId: string, position: "top" | "bottom" | "before" | "after", relativeTo?: string) {
-    const p = await getPolicy(policyId);
-    const query = { sourceFirewallZoneId: p.source.zoneId, destinationFirewallZoneId: p.destination.zoneId };
-    const current = await ctx.integration.siteRequest<Json>("/firewall/policies/ordering", { query });
-    const before: string[] = (current.orderedFirewallPolicyIds?.beforeSystemDefined ?? []).filter((id: string) => id !== policyId);
-    const after: string[] = (current.orderedFirewallPolicyIds?.afterSystemDefined ?? []).filter((id: string) => id !== policyId);
-
-    if (position === "top") before.unshift(policyId);
-    else if (position === "bottom") before.push(policyId);
-    else {
-      if (!relativeTo) throw new Error(`position "${position}" requires relativeTo`);
-      const list = before.includes(relativeTo) ? before : after.includes(relativeTo) ? after : undefined;
-      if (!list) throw new Error(`Policy ${relativeTo} is not a user-defined policy in the same zone pair`);
-      list.splice(list.indexOf(relativeTo) + (position === "after" ? 1 : 0), 0, policyId);
-    }
-    const body = { orderedFirewallPolicyIds: { beforeSystemDefined: before, afterSystemDefined: after } };
-    return ctx.integration.siteRequest<Json>("/firewall/policies/ordering", { method: "PUT", query, body });
-  }
+  const move = (policyId: string, position: "top" | "bottom" | "before" | "after", relativeTo?: string) =>
+    movePolicy(ctx, policyId, position, relativeTo);
 
   defineTool(
     server,

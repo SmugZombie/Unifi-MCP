@@ -18,6 +18,9 @@ export interface Config {
   auditLog?: string;
   timeoutMs: number;
   transport: TransportConfig;
+  /** JSON file holding scheduled undo actions (timed blocks). */
+  stateFile: string;
+  schedulerIntervalMs: number;
 }
 
 export type TransportConfig =
@@ -81,5 +84,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     auditLog,
     timeoutMs: Number(env.UNIFI_TIMEOUT_MS) || 15000,
     transport: loadTransport(env),
+    stateFile: env.UNIFI_STATE_FILE || join(homedir(), ".unifi-mcp", "scheduled.json"),
+    schedulerIntervalMs: Number(env.UNIFI_SCHEDULER_INTERVAL_MS) || 30_000,
   };
 }

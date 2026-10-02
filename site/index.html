@@ -300,7 +300,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
           <!-- Server -->
           <rect class="d-box hl" x="320" y="70" width="230" height="190" rx="12"/>
           <text class="d-title" x="435" y="104" text-anchor="middle">UniFi MCP server</text>
-          <text class="d-sub" x="435" y="132" text-anchor="middle">29 tools with schemas</text>
+          <text class="d-sub" x="435" y="132" text-anchor="middle">35 tools with schemas</text>
           <text class="d-sub" x="435" y="152" text-anchor="middle">Name → ID resolution</text>
           <text class="d-sub" x="435" y="172" text-anchor="middle">Firewall policy builder</text>
           <text class="d-sub" x="435" y="192" text-anchor="middle">Dry runs and guard rails</text>
@@ -371,13 +371,17 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
             <tr><td><code>unifi_traffic_by_app</code></td><td>Data usage by app and by device over hours to a month; who uses an app; what one device uses</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_wan_usage</code></td><td>Internet totals, average Mbps and busiest interval at 5-minute, hourly or daily granularity</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_lookup_dpi</code></td><td>DPI application and category names by ID, or search by name</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_flow_top</code></td><td>Top-N flows grouped by source IP, country, port, client, domain or policy, with a breakdown</td><td><span class="tag read">read</span></td></tr>
+            <tr><td><code>unifi_list_port_forwards</code> / <code>unifi_wan_health</code></td><td>Port-forward rules; internet status, latency, availability, speed test and gateway load</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_flow_statistics</code></td><td>Top clients, destinations, apps and blocking policies per hour, day, week or month</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_list_networks</code> / <code>unifi_list_wifi</code></td><td>VLANs, subnets and SSIDs</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_list_firewall_zones</code></td><td>Zones and the networks in each</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_list_firewall_policies</code> / <code>unifi_get_firewall_policy</code></td><td>Policies with human-readable source, destination, protocol and action</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_get_firewall_policy_order</code></td><td>Evaluation order for a zone pair (first match wins)</td><td><span class="tag read">read</span></td></tr>
             <tr><td><code>unifi_api_get</code></td><td>Read-only access to any other endpoint, paged, with field selection</td><td><span class="tag read">read</span></td></tr>
-            <tr><td><code>unifi_block_client</code> / <code>unifi_unblock_client</code></td><td>Block a device from the whole network, or let it back on</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_block_client</code> / <code>unifi_unblock_client</code></td><td>Block a device from the whole network, optionally until a time, or let it back on</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_block_internet</code></td><td>Cut internet for devices while they stay on the LAN, optionally until a time (e.g. 06:00)</td><td><span class="tag write">write</span></td></tr>
+            <tr><td><code>unifi_list_scheduled_actions</code> / <code>unifi_cancel_scheduled_action</code></td><td>See pending timed undos; lift a block early or keep it</td><td><span class="tag write">write</span></td></tr>
             <tr><td><code>unifi_reconnect_client</code> / <code>unifi_rename_client</code></td><td>Force a reconnect; set a friendly name or note</td><td><span class="tag write">write</span></td></tr>
             <tr><td><code>unifi_create_firewall_policy</code></td><td>New policy from simple fields (IPs, CIDRs, networks, MACs, domains, countries, ports, protocol, schedule) or raw JSON; dry run supported</td><td><span class="tag write">write</span></td></tr>
             <tr><td><code>unifi_update_firewall_policy</code></td><td>Change only the fields you name; dry run shows before and after</td><td><span class="tag write">write</span></td></tr>
@@ -400,7 +404,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
         <div class="prompt">Block the device called ESP_3A1F2C and note it as unknown.</div>
         <div class="prompt">Make sure the IoT network can't reach my main LAN, except Home Assistant on port 8123.</div>
         <div class="prompt">Block inbound traffic from CN and RU to my port-forwarded services.</div>
-        <div class="prompt">Turn off the kids' internet every night from 10pm to 6am.</div>
+        <div class="prompt">Turn off the kids' iPads' internet until 6 AM.</div>
         <div class="prompt">Show me every firewall policy that allows traffic into Internal.</div>
         <div class="prompt">Power-cycle the camera on switch port 7.</div>
       </div>
@@ -415,6 +419,7 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: 
         <div class="card"><h3>Approval on every write</h3><p>Write tools carry MCP <code>destructiveHint</code> annotations, so clients like Claude Code prompt before running them. The server's built-in instructions tell the agent to describe changes and confirm with you first.</p></div>
         <div class="card"><h3>Dry runs</h3><p>Firewall create and update accept <code>dryRun: true</code>, which returns the exact request and a before/after summary without touching the console.</p></div>
         <div class="card"><h3>Audit log</h3><p>Every change is appended as a JSON line to <code>~/.unifi-mcp/audit.log</code> (or <code>/data/audit.log</code> in Docker). Deleted policies are logged in full and can be recreated.</p></div>
+        <div class="card"><h3>Timed blocks undo themselves</h3><p>Temporary blocks are saved with their expiry and survive restarts. If the server is down at expiry, the undo runs as soon as it is back. <code>unifi_list_scheduled_actions</code> shows what is pending.</p></div>
         <div class="card"><h3>Read-only mode</h3><p>Set <code>UNIFI_READ_ONLY=true</code> and write tools aren't registered at all, so the agent can't see them, let alone call them.</p></div>
         <div class="card"><h3>System policies protected</h3><p>Built-in system-defined firewall policies are refused for update and delete. The agent is pointed to an overriding user policy instead.</p></div>
         <div class="card"><h3>Locked-down HTTP mode</h3><p>Over HTTP, a bearer token of 24+ characters is mandatory, browser origins are rejected by default, and the Docker port binds to localhost unless you choose otherwise.</p></div>

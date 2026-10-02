@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -25,15 +25,17 @@ const policies: any[] = [
   { id: "p-sys", index: 1, name: "Allow All Traffic", enabled: true, action: { type: "ALLOW", allowReturnTraffic: false }, source: { zoneId: "z-int" }, destination: { zoneId: "z-ext" }, ipProtocolScope: { ipVersion: "IPV4_AND_IPV6" }, loggingEnabled: false, metadata: { origin: "SYSTEM_DEFINED" } },
 ];
 let ordering: string[] = [];
+let policySeq = 0;
 const blocked = new Set<string>();
 const users = [
-  { _id: "u1", mac: "aa:bb:cc:dd:ee:01", hostname: "living-room-tv", oui: "Samsung", last_ip: "10.0.30.20", blocked: false },
+  { _id: "u1", mac: "aa:bb:cc:dd:ee:01", hostname: "living-room-tv", oui: "Samsung", last_ip: "10.0.30.20", blocked: false, last_connection_network_name: "IoT VLAN" },
   { _id: "u2", mac: "aa:bb:cc:dd:ee:02", name: "Alex iPhone", oui: "Apple", ip: "10.0.0.15", essid: "Home", idletime: 12, "tx_bytes-r": 125000, "rx_bytes-r": 12500, tx_bytes: 5e8, rx_bytes: 2e7, uptime: 3600 },
-  { _id: "u3", mac: "aa:bb:cc:dd:ee:03", name: "NAS", oui: "Synology", ip: "10.0.0.5", is_wired: true, "wired-tx_bytes-r": 250000, "wired-rx_bytes-r": 1000, "wired-tx_bytes": 1e9, "wired-rx_bytes": 1e6, uptime: 7200 },
+  { _id: "u3", mac: "aa:bb:cc:dd:ee:03", name: "NAS", oui: "Synology", ip: "10.0.0.5", fixed_ip: "10.0.0.5", use_fixedip: true, network: "Default", is_wired: true, "wired-tx_bytes-r": 250000, "wired-rx_bytes-r": 1000, "wired-tx_bytes": 1e9, "wired-rx_bytes": 1e6, uptime: 7200 },
 ];
 const requests: string[] = [];
 let lastFlowQuery: any;
 let lastReportQuery: any;
+let flowPagesServed = 0;
 const flow = {
   id: "f1", time: 1790928000000, action: "blocked", direction: "outgoing", risk: "low", protocol: "TCP", service: "HTTPS", count: 1,
   source: { ip: "10.0.0.5", port: 50000, mac: "aa:bb:cc:dd:ee:03" },
@@ -75,6 +77,24 @@ const fake = createServer(async (req, res) => {
       return env([]);
     }
     if (sub.startsWith("/rest/user/")) return env([]);
+    if (sub === "/stat/sysinfo") return env([{ timezone: "America/Phoenix" }]);
+    if (sub === "/rest/portforward") {
+      return env([
+        { _id: "pf1", name: "NAS web", enabled: true, proto: "tcp", dst_port: "8443", fwd: "10.0.0.5", fwd_port: "443", pfwd_interface: "wan", src: "any", src_limiting_enabled: false, log: false },
+        { _id: "pf2", name: "Game", enabled: false, proto: "udp", dst_port: "3074", fwd: "10.0.0.99", fwd_port: "", pfwd_interface: "both", src: "203.0.113.0/24", src_limiting_enabled: true, destination_ip: "" },
+      ]);
+    }
+    if (sub === "/stat/health") {
+      return env([
+        { subsystem: "wan", status: "ok", wan_ip: "203.0.113.2", isp_name: "Example ISP", gateways: ["203.0.113.1"], nameservers: ["1.1.1.1"], gw_name: "UDM", gw_version: "4.0", "gw_system-stats": { cpu: "12.5", mem: "60.1", uptime: "1000" },
+          uptime_stats: { WAN: { availability: 99.5, latency_average: 20, uptime: 900, time_period: 1000,
+            alerting_monitors: [{ type: "icmp", target: "ping.ui.com", availability: 100, latency_average: 15 }],
+            monitors: [{ type: "icmp", target: "1.1.1.1", availability: 98, latency_average: 30 }] } } },
+        { subsystem: "www", status: "ok", latency: 21, drops: 2, uptime: 5000, xput_down: 900, xput_up: 40, speedtest_status: "Success", speedtest_lastrun: 1790900000, speedtest_ping: 12, "rx_bytes-r": 1250000, "tx_bytes-r": 125000 },
+        { subsystem: "lan", status: "ok", num_user: 10 },
+        { subsystem: "wlan", status: "ok", num_user: 20, num_guest: 1 },
+      ]);
+    }
     if (sub === "/stat/report/hourly.site" && req.method === "POST") {
       lastReportQuery = b;
       const t0 = Math.floor(b.start / 3600000) * 3600000;
@@ -90,7 +110,9 @@ const fake = createServer(async (req, res) => {
     const sub = p.slice("/proxy/network/v2/api/site/default".length);
     if (sub === "/traffic-flows" && req.method === "POST") {
       lastFlowQuery = b;
-      return json(200, { data: [flow], has_next: true, page_number: b.pageNumber, total_element_count: 120, total_page_count: 3 });
+      flowPagesServed++;
+      const second = { ...flow, id: "f2", source: { ip: "198.51.100.7", port: 1234, region: "NL" }, destination: { ...flow.destination, port: 22 }, count: 3 };
+      return json(200, { data: b.pageSize >= 1000 ? [flow, second] : [flow], has_next: b.pageNumber < 2, page_number: b.pageNumber, total_element_count: b.pageSize >= 1000 ? 6 : 120, total_page_count: 3 });
     }
     if (sub === "/traffic") {
       const app = (category: number, application: number, rx: number, tx: number) => ({ category, application, bytes_received: rx, bytes_transmitted: tx, total_bytes: rx + tx, activity_seconds: 600 });
@@ -131,7 +153,8 @@ const fake = createServer(async (req, res) => {
   if (ip === "/v1/dpi/categories") return page([{ id: 4, name: "Media streaming services" }, { id: 1, name: "Peer-to-peer networks" }]);
   if (ip === `${s}/firewall/policies` && req.method === "GET") return page(policies);
   if (ip === `${s}/firewall/policies` && req.method === "POST") {
-    const created = { ...b, id: `p-${policies.length}`, index: 100 + policies.length, metadata: { origin: "USER_DEFINED" } };
+    // Unique ids, like the real controller (ids must not be reused after deletes).
+    const created = { ...b, id: `p-${++policySeq}`, index: 100 + policySeq, metadata: { origin: "USER_DEFINED" } };
     policies.push(created);
     ordering.push(created.id);
     return json(201, created);
@@ -172,6 +195,8 @@ function serverEnv(): Record<string, string> {
     UNIFI_USERNAME: "admin",
     UNIFI_PASSWORD: "pw",
     UNIFI_AUDIT_LOG: auditLog,
+    UNIFI_STATE_FILE: join(dirname(auditLog), "scheduled.json"),
+    UNIFI_SCHEDULER_INTERVAL_MS: "200",
   };
 }
 
@@ -412,4 +437,100 @@ test("HTTP transport refuses to start without a strong token", async () => {
   const [code] = await once(child, "exit");
   assert.equal(code, 1);
   assert.match(err, /MCP_AUTH_TOKEN/);
+});
+
+async function waitFor(check: () => boolean, ms = 5000) {
+  const end = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > end) {
+      let state = "";
+      try {
+        state = readFileSync(join(dirname(auditLog), "scheduled.json"), "utf8");
+      } catch {}
+      throw new Error(`timed out waiting; scheduler state: ${state}`);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+test("flow top-N groups across pages", async () => {
+  flowPagesServed = 0;
+  const r = await call("unifi_flow_top", { action: "blocked", direction: ["incoming"], groupBy: "destinationPort", thenBy: "sourceRegion" });
+  assert.equal(flowPagesServed, 3, "follows has_next across pages");
+  assert.equal(r.flowsGrouped, 6);
+  assert.equal(r.sampled, false);
+  // f2 has count 3 per page, f1 count 1: port 22 = 9 flows, port 443 = 3.
+  assert.deepEqual(r.top.map((g: any) => [g.destinationPort, g.flows]), [["22", 9], ["443", 3]]);
+  assert.deepEqual(r.top[0].sourceRegion, ["NL (9)"]);
+  assert.deepEqual(lastFlowQuery.direction, ["incoming"]);
+  const byClient = await call("unifi_flow_top", { groupBy: "client", maxFlows: 1000 });
+  assert.deepEqual(
+    byClient.top.map((g: any) => [g.client, g.flows]),
+    [["(unknown)", 9], ["NAS (aa:bb:cc:dd:ee:03)", 3]],
+    "flows without a source MAC (inbound) group as (unknown); local MACs get their names",
+  );
+});
+
+test("port forwards and WAN health", async () => {
+  const pf = await call("unifi_list_port_forwards");
+  assert.equal(pf.count, 2);
+  assert.deepEqual(pf.rules[0], { id: "pf1", name: "NAS web", enabled: true, protocol: "tcp", wanPort: "8443", forwardTo: "10.0.0.5:443", device: "NAS", wanInterface: "wan", wanAddress: "any", allowedSources: "any" });
+  assert.equal(pf.rules[1].forwardTo, "10.0.0.99:3074", "empty fwd_port means same as WAN port");
+  assert.equal(pf.rules[1].allowedSources, "203.0.113.0/24");
+
+  const h = await call("unifi_wan_health");
+  assert.equal(h.isp.name, "Example ISP");
+  assert.deepEqual(h.throughputNowMbps, { down: 10, up: 1 });
+  assert.equal(h.lastSpeedTest.downMbps, 900);
+  assert.equal(h.gatewayDevice.cpuPct, 12.5);
+  assert.deepEqual(h.perWan[0].degradedMonitors, ["icmp 1.1.1.1: 98% avail, 30 ms"], "alerting monitors at 100% are not degraded");
+});
+
+test("timed client block is lifted automatically", async () => {
+  const until = new Date(Date.now() + 1200).toISOString();
+  const r = await call("unifi_block_client", { mac: "aa:bb:cc:dd:ee:01", until, reason: "homework" });
+  assert.ok(r.scheduledUnblock.id);
+  assert.match(r.scheduledUnblock.unblockAt, /America\/Phoenix/);
+  assert.ok(blocked.has("aa:bb:cc:dd:ee:01"));
+  await waitFor(() => !blocked.has("aa:bb:cc:dd:ee:01"));
+  // The job is marked done just after the unblock call returns; poll for the saved status.
+  const stateFile = join(dirname(auditLog), "scheduled.json");
+  const jobStatus = () => (JSON.parse(readFileSync(stateFile, "utf8")) as any[]).find((j) => j.id === r.scheduledUnblock.id)?.status;
+  await waitFor(() => jobStatus() === "done");
+  const hist = await call("unifi_list_scheduled_actions", { includeHistory: true });
+  assert.equal(hist.actions.find((a: any) => a.id === r.scheduledUnblock.id).status, "done");
+  await assert.rejects(call("unifi_block_client", { mac: "aa:bb:cc:dd:ee:01", until: "2020-01-01T00:00:00Z" }), /past/);
+});
+
+test("timed internet block creates per-zone policies and removes them", async () => {
+  const start = policies.length;
+  const r = await call("unifi_block_internet", { devices: ["living-room-tv", "NAS"], durationMinutes: 60, reason: "bedtime" });
+  assert.equal(r.policies.length, 2, "one policy per zone (IoT and Internal)");
+  assert.equal(policies.length, start + 2);
+  const zonesUsed = policies.slice(start).map((p) => p.source.zoneId).sort();
+  assert.deepEqual(zonesUsed, ["z-int", "z-iot"]);
+  for (const p of policies.slice(start)) {
+    assert.equal(p.action.type, "BLOCK");
+    assert.equal(p.destination.zoneId, "z-ext");
+    assert.equal(p.source.trafficFilter.type, "MAC_ADDRESS");
+  }
+  assert.equal(ordering[0], policies[start + 1].id, "placed first in order");
+
+  const pending = await call("unifi_list_scheduled_actions");
+  const mine = pending.actions.filter((a: any) => a.reason === "bedtime");
+  assert.equal(mine.length, 2);
+  // Lift one early, keep the other indefinitely.
+  await call("unifi_cancel_scheduled_action", { id: mine[0].id, runNow: true });
+  await call("unifi_cancel_scheduled_action", { id: mine[1].id, runNow: false });
+  assert.equal(policies.length, start + 1);
+  assert.equal((await call("unifi_list_scheduled_actions")).actions.filter((a: any) => a.reason === "bedtime").length, 0);
+
+  // Short expiry removes the policy on its own.
+  const before = policies.length;
+  await call("unifi_block_internet", { devices: ["aa:bb:cc:dd:ee:02"], until: new Date(Date.now() + 1200).toISOString() });
+  assert.equal(policies.length, before + 1);
+  await waitFor(() => policies.length === before);
+  const audit = readFileSync(auditLog, "utf8");
+  assert.match(audit, /"action":"scheduled_delete_firewall_policy"/);
+  assert.match(audit, /"action":"scheduled_unblock_client"/);
 });

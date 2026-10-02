@@ -27,7 +27,7 @@ Home and small-office networks keep growing: dozens of phones, TVs, cameras and 
 
 ```mermaid
 flowchart LR
-    A["AI client<br/>Claude Code, Claude Desktop,<br/>other MCP agents"] -- "tool call (MCP over stdio or HTTP)" --> S["UniFi MCP server<br/>29 tools · name→ID resolution<br/>policy builder · dry runs · audit log"]
+    A["AI client<br/>Claude Code, Claude Desktop,<br/>other MCP agents"] -- "tool call (MCP over stdio or HTTP)" --> S["UniFi MCP server<br/>35 tools · name→ID resolution<br/>policy builder · dry runs · audit log"]
     S -- result --> A
     S -- "API key" --> O["Official Network API<br/>/proxy/network/integration/v1"]
     S -- "API key or local login" --> I["Internal API<br/>/proxy/network/api/s/{site}"]
@@ -171,13 +171,19 @@ claude mcp add unifi \
 - `unifi_traffic_by_app`: data usage by application and by device over hours to a month (top apps, top devices, what one device uses, who uses an app such as BitTorrent)
 - `unifi_wan_usage`: internet download/upload totals, average Mbps and busiest interval, at 5-minute, hourly or daily granularity
 - `unifi_lookup_dpi`: DPI application and category names by ID, or search by name
+- `unifi_flow_top`: group flows server-side and return the top N by source IP, country, port, client, domain, service or policy, with an optional breakdown (`thenBy`)
+- `unifi_list_port_forwards`: port-forward rules with target device names
+- `unifi_wan_health`: WAN status, ISP, latency, drops, per-WAN availability and probes, last speed test, current throughput, gateway CPU/memory
+- `unifi_list_scheduled_actions`: pending automatic undos from timed blocks
 - `unifi_flow_statistics`: top clients, destinations, apps and blocking policies, and blocked/allowed counts by country and risk, per hour, day, week or month
 - `unifi_list_networks`, `unifi_list_wifi`
 - `unifi_list_firewall_zones`, `unifi_list_firewall_policies`, `unifi_get_firewall_policy`, `unifi_get_firewall_policy_order`
 - `unifi_api_get`: read-only access to any other endpoint on the official, classic internal (`internal`) or newer internal (`internal-v2`) API, with paging, `fields` selection and `match` filtering for large lists. Paths with `.` or `..` segments are refused. A `body` turns it into a POST, allowed only for read-only query endpoints (`/stat/report/*`, `/traffic-flows`).
 
 **Write** (not registered when `UNIFI_READ_ONLY=true`)
-- `unifi_block_client`, `unifi_unblock_client`, `unifi_reconnect_client`, `unifi_rename_client`
+- `unifi_block_client` (optionally timed: `durationMinutes`, `untilTime: "06:00"` in the console's timezone, or `until`), `unifi_unblock_client`, `unifi_reconnect_client`, `unifi_rename_client`
+- `unifi_block_internet`: cut internet access for devices while they stay on the LAN, optionally until a time; creates a temporary BLOCK policy per zone and removes it at expiry
+- `unifi_cancel_scheduled_action`: lift a timed block early, or keep it indefinitely
 - `unifi_create_firewall_policy`, `unifi_update_firewall_policy`, `unifi_set_firewall_policy_enabled`, `unifi_delete_firewall_policy`, `unifi_move_firewall_policy`
 - `unifi_restart_device`, `unifi_power_cycle_port`
 
@@ -191,6 +197,8 @@ Firewall tools accept **zone and network names** ("IoT", "External") as well as 
 - "What got blocked overnight, and by which policies?"
 - "Which device is using BitTorrent, and how much did it download this month?"
 - "What's our average internet bandwidth this week, and when was the busiest hour?"
+- "Which countries and ports is blocked inbound traffic coming from today?"
+- "Turn off internet for the kids' iPads until 6 AM."
 - "Block the device called *ESP_3A1F2C* and note it as unknown."
 - "Create a firewall policy so the IoT zone can't reach Internal, except my Home Assistant at 10.0.0.20 on port 8123. Show me a dry run first."
 - "Block inbound traffic from CN and RU to my port-forwarded services."
@@ -202,6 +210,7 @@ Firewall tools accept **zone and network names** ("IoT", "External") as well as 
 - System-defined policies are refused for update and delete.
 - Write tools carry MCP `destructiveHint` annotations, so clients ask for approval.
 - `UNIFI_READ_ONLY=true` leaves out every write tool.
+- Timed blocks are undone by this server: pending undos are saved in `UNIFI_STATE_FILE` (default `~/.unifi-mcp/scheduled.json`, `/data/scheduled.json` in Docker) and survive restarts. If the server is not running at the expiry time, the undo runs as soon as it starts again. `unifi_list_scheduled_actions` shows what is pending.
 - Policy order matters (first match wins per zone pair). Use `position: "top"` when a new BLOCK must beat an existing ALLOW.
 
 ## Troubleshooting

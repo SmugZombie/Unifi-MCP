@@ -10,6 +10,7 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_PORT: "3000"
       UNIFI_AUDIT_LOG: /data/audit.log
+      UNIFI_STATE_FILE: /data/scheduled.json
     ports:
       # Only reachable from this machine by default. Set MCP_PUBLISH=3000 in .env to expose on the LAN.
       - "${MCP_PUBLISH:-127.0.0.1:3000}:3000"

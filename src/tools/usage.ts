@@ -8,7 +8,7 @@ import { dpiAppKey } from "./flows.js";
  * Usage reporting:
  *   GET  /v2/api/site/{site}/traffic?start&end&includeUnidentified=true   DPI usage per app and per client
  *   POST /api/s/{site}/stat/report/{5minutes,hourly,daily}.site           WAN byte counters per interval
- * The console keeps 5-minute data for about a day, hourly for about a week and daily for months.
+ * Default console retention: 5-minute data 24 h, hourly 168 h, daily 2160 h (90 days); see stat/sysinfo.
  */
 
 const mb = (bytes: number | undefined) => (typeof bytes === "number" ? Math.round(bytes / 1e5) / 10 : undefined);
@@ -32,7 +32,7 @@ interface TrafficResponse {
 const GRANULARITY = {
   "5min": { report: "5minutes.site", seconds: 300, maxHours: 24 },
   hourly: { report: "hourly.site", seconds: 3600, maxHours: 24 * 7 },
-  daily: { report: "daily.site", seconds: 86400, maxHours: 24 * 400 },
+  daily: { report: "daily.site", seconds: 86400, maxHours: 24 * 90 },
 } as const;
 
 export function pickGranularity(hours: number, requested: "auto" | keyof typeof GRANULARITY): keyof typeof GRANULARITY {
@@ -204,7 +204,7 @@ export function registerUsageTools(server: McpServer, ctx: UnifiContext): void {
         "per-interval rows. Granularity auto picks 5-minute data up to 6 hours, hourly up to 7 days, daily beyond. " +
         "Peaks are interval averages, not instantaneous maxima.",
       input: {
-        lastHours: z.number().min(1).max(24 * 400).default(24).describe("Window ending now, in hours (e.g. 168 = 7 days, 720 = 30 days)"),
+        lastHours: z.number().min(1).max(24 * 90).default(24).describe("Window ending now, in hours (e.g. 168 = 7 days, 720 = 30 days)"),
         granularity: z.enum(["auto", "5min", "hourly", "daily"]).default("auto"),
         includeRows: z.boolean().default(true).describe("Include one row per interval"),
       },

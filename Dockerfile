@@ -12,7 +12,8 @@ ENV NODE_ENV=production \
     MCP_TRANSPORT=http \
     MCP_HOST=0.0.0.0 \
     MCP_PORT=3000 \
-    UNIFI_AUDIT_LOG=/data/audit.log
+    UNIFI_AUDIT_LOG=/data/audit.log \
+    UNIFI_STATE_FILE=/data/scheduled.json
 WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
