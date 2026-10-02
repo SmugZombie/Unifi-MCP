@@ -5,6 +5,7 @@ import { registerFirewallTools } from "./tools/firewall.js";
 import { registerFlowTools } from "./tools/flows.js";
 import { registerGatewayTools } from "./tools/gateway.js";
 import { registerNetworkTools } from "./tools/network.js";
+import { registerReachabilityTools } from "./tools/reachability.js";
 import { registerUsageTools } from "./tools/usage.js";
 
 export const VERSION = "0.2.0";
@@ -15,6 +16,7 @@ Guidelines:
 - For bandwidth questions use unifi_list_clients(sortBy="traffic"): it includes current download/upload rates (a per-second snapshot) and totals since connecting. Use unifi_get_client for every field of one device.
 - For "what is this device talking to / what was blocked" use unifi_list_flows (connection logs with filters); for top talkers, destinations, apps and blocking policies over a period use unifi_flow_statistics.
 - For data usage by app or device over days/weeks use unifi_traffic_by_app; for internet bandwidth over time (averages, totals, busiest hours) use unifi_wan_usage; to turn DPI ids into names use unifi_lookup_dpi.
+- For "can X reach Y" questions use unifi_check_reachability instead of reasoning over policy lists by hand; pass port/protocol when known, and \`at\` to check a scheduled time.
 - To summarise many flows (top source IPs, countries, ports, clients) use unifi_flow_top rather than paging unifi_list_flows.
 - For temporary restrictions use expiries: unifi_block_client(untilTime="06:00") removes a device from the network; unifi_block_internet keeps it on the LAN but cuts internet. Times are in the console's timezone. Tell the user when the block will lift.
 - Avoid dumping large raw lists with unifi_api_get; pass \`fields\` and \`match\`, and follow nextOffset.
@@ -34,5 +36,6 @@ export function createMcpServer(ctx: UnifiContext): McpServer {
   registerFlowTools(server, ctx);
   registerUsageTools(server, ctx);
   registerGatewayTools(server, ctx);
+  registerReachabilityTools(server, ctx);
   return server;
 }

@@ -19,17 +19,34 @@ const zones = [
   { id: "z-int", name: "Internal", networkIds: ["n-lan"], metadata: { origin: "SYSTEM_DEFINED" } },
   { id: "z-ext", name: "External", networkIds: [], metadata: { origin: "SYSTEM_DEFINED" } },
   { id: "z-iot", name: "IoT", networkIds: ["n-iot"], metadata: { origin: "USER_DEFINED" } },
+  { id: "z-gw", name: "Gateway", networkIds: [], metadata: { origin: "SYSTEM_DEFINED" } },
 ];
-const networks = [{ id: "n-lan", name: "Default" }, { id: "n-iot", name: "IoT VLAN", vlanId: 30 }];
+const networks = [{ id: "n-lan", name: "Default", zoneId: "z-int" }, { id: "n-iot", name: "IoT VLAN", vlanId: 30, zoneId: "z-iot" }];
+const networkconf = [
+  { _id: "c1", name: "Default", purpose: "corporate", ip_subnet: "10.0.0.1/24" },
+  { _id: "c2", name: "IoT VLAN", purpose: "corporate", ip_subnet: "10.0.30.1/24" },
+  { _id: "c3", name: "Internet 1", purpose: "wan" },
+];
+let homeSsidIsolated = false;
+const sys = (id: string, src: string, dst: string, action: string, extra: any = {}) => ({
+  id, index: 2147483647, name: `${action === "BLOCK" ? "Block" : "Allow"} All Traffic`, enabled: true, action: { type: action },
+  source: { zoneId: src }, destination: { zoneId: dst }, ipProtocolScope: { ipVersion: "IPV4_AND_IPV6" }, loggingEnabled: false,
+  metadata: { origin: "SYSTEM_DEFINED" }, ...extra,
+});
 const policies: any[] = [
-  { id: "p-sys", index: 1, name: "Allow All Traffic", enabled: true, action: { type: "ALLOW", allowReturnTraffic: false }, source: { zoneId: "z-int" }, destination: { zoneId: "z-ext" }, ipProtocolScope: { ipVersion: "IPV4_AND_IPV6" }, loggingEnabled: false, metadata: { origin: "SYSTEM_DEFINED" } },
+  { id: "p-sys", index: 2147483647, name: "Allow All Traffic", enabled: true, action: { type: "ALLOW", allowReturnTraffic: false }, source: { zoneId: "z-int" }, destination: { zoneId: "z-ext" }, ipProtocolScope: { ipVersion: "IPV4_AND_IPV6" }, loggingEnabled: false, metadata: { origin: "SYSTEM_DEFINED" } },
+  sys("p-sys-iot-int", "z-iot", "z-int", "BLOCK"),
+  sys("p-sys-iot-int-ret", "z-iot", "z-int", "ALLOW", { index: 30000, name: "Allow Return Traffic", connectionStateFilter: ["RELATED", "ESTABLISHED"] }),
+  sys("p-sys-int-iot", "z-int", "z-iot", "ALLOW"),
+  sys("p-sys-iot-ext", "z-iot", "z-ext", "ALLOW"),
+  sys("p-sys-int-gw", "z-int", "z-gw", "ALLOW"),
 ];
 let ordering: string[] = [];
 let policySeq = 0;
 const blocked = new Set<string>();
 const users = [
   { _id: "u1", mac: "aa:bb:cc:dd:ee:01", hostname: "living-room-tv", oui: "Samsung", last_ip: "10.0.30.20", blocked: false, last_connection_network_name: "IoT VLAN" },
-  { _id: "u2", mac: "aa:bb:cc:dd:ee:02", name: "Alex iPhone", oui: "Apple", ip: "10.0.0.15", essid: "Home", idletime: 12, "tx_bytes-r": 125000, "rx_bytes-r": 12500, tx_bytes: 5e8, rx_bytes: 2e7, uptime: 3600 },
+  { _id: "u2", mac: "aa:bb:cc:dd:ee:02", name: "Alex iPhone", oui: "Apple", ip: "10.0.0.15", essid: "Home", network: "Default", idletime: 12, "tx_bytes-r": 125000, "rx_bytes-r": 12500, tx_bytes: 5e8, rx_bytes: 2e7, uptime: 3600 },
   { _id: "u3", mac: "aa:bb:cc:dd:ee:03", name: "NAS", oui: "Synology", ip: "10.0.0.5", fixed_ip: "10.0.0.5", use_fixedip: true, network: "Default", is_wired: true, "wired-tx_bytes-r": 250000, "wired-rx_bytes-r": 1000, "wired-tx_bytes": 1e9, "wired-rx_bytes": 1e6, uptime: 7200 },
 ];
 const requests: string[] = [];
@@ -78,6 +95,8 @@ const fake = createServer(async (req, res) => {
     }
     if (sub.startsWith("/rest/user/")) return env([]);
     if (sub === "/stat/sysinfo") return env([{ timezone: "America/Phoenix" }]);
+    if (sub === "/rest/networkconf") return env(networkconf);
+    if (sub === "/rest/wlanconf") return env([{ _id: "w1", name: "Home", l2_isolation: homeSsidIsolated }]);
     if (sub === "/rest/portforward") {
       return env([
         { _id: "pf1", name: "NAS web", enabled: true, proto: "tcp", dst_port: "8443", fwd: "10.0.0.5", fwd_port: "443", pfwd_interface: "wan", src: "any", src_limiting_enabled: false, log: false },
@@ -367,11 +386,12 @@ test("search clients and block/unblock via session fallback", async () => {
 });
 
 test("firewall policy lifecycle by zone/network names", async () => {
+  const initialCount = policies.length;
   const dry = await call("unifi_create_firewall_policy", {
     name: "IoT to LAN", action: "BLOCK", sourceZone: "IoT", destinationZone: "internal", source: { networks: ["IoT VLAN"] }, dryRun: true,
   });
   assert.equal(dry.request.body.source.trafficFilter.networkFilter.networkIds[0], "n-iot");
-  assert.equal(policies.length, 1, "dry run must not create");
+  assert.equal(policies.length, initialCount, "dry run must not create");
 
   const created = await call("unifi_create_firewall_policy", {
     name: "IoT to LAN", action: "BLOCK", sourceZone: "IoT", destinationZone: "Internal", destination: { ports: [22, 443] }, position: "top",
@@ -393,14 +413,14 @@ test("firewall policy lifecycle by zone/network names", async () => {
 
   const del = await call("unifi_delete_firewall_policy", { policyId: id });
   assert.equal(del.restoreWith.rawPolicy.name, "IoT to LAN");
-  assert.equal(policies.length, 1);
+  assert.equal(policies.length, initialCount);
 
   const audit = readFileSync(auditLog, "utf8").trim().split("\n").map((l) => JSON.parse(l).action);
   assert.deepEqual(audit.slice(-4), ["create_firewall_policy", "update_firewall_policy", "set_firewall_policy_enabled", "delete_firewall_policy"]);
 });
 
 test("unknown zone gives a helpful error", async () => {
-  await assert.rejects(call("unifi_list_firewall_policies", { sourceZone: "Nope" }), /Known zones: Internal, External, IoT/);
+  await assert.rejects(call("unifi_list_firewall_policies", { sourceZone: "Nope" }), /Known zones: Internal, External, IoT, Gateway/);
 });
 
 test("HTTP transport: health, auth, origin and tool calls", async () => {
@@ -426,7 +446,7 @@ test("HTTP transport: health, auth, origin and tool calls", async () => {
   const { tools } = await http.listTools();
   assert.ok(tools.some((t) => t.name === "unifi_block_client"));
   const r: any = await http.callTool({ name: "unifi_list_firewall_zones", arguments: {} });
-  assert.deepEqual(JSON.parse(r.content[0].text).map((z: any) => z.name), ["Internal", "External", "IoT"]);
+  assert.deepEqual(JSON.parse(r.content[0].text).map((z: any) => z.name), ["Internal", "External", "IoT", "Gateway"]);
   await http.close();
 });
 
@@ -533,4 +553,63 @@ test("timed internet block creates per-zone policies and removes them", async ()
   const audit = readFileSync(auditLog, "utf8");
   assert.match(audit, /"action":"scheduled_delete_firewall_policy"/);
   assert.match(audit, /"action":"scheduled_unblock_client"/);
+});
+
+test("reachability: zones, policy order, ports, blocked clients, same network, isolation", async () => {
+  // IoT -> Internal hits the system catch-all BLOCK (return-traffic rule is skipped for new connections).
+  let r = await call("unifi_check_reachability", { from: "living-room-tv", to: "NAS", port: 22, protocol: "tcp" });
+  assert.equal(r.source.zone, "IoT");
+  assert.equal(r.destination.zone, "Internal");
+  assert.equal(r.verdict, "blocked");
+  assert.equal(r.decidingPolicy.name, "Block All Traffic");
+  assert.equal(r.evaluated.steps[0].outcome, "skipped");
+
+  // A user exception for Home Assistant on 8123.
+  const created = await call("unifi_create_firewall_policy", {
+    name: "TV to HA", action: "ALLOW", sourceZone: "IoT", destinationZone: "Internal", destination: { ips: ["10.0.0.5"], ports: [8123] }, protocol: "tcp",
+  });
+  try {
+    r = await call("unifi_check_reachability", { from: "aa:bb:cc:dd:ee:01", to: "10.0.0.5", port: 8123, protocol: "tcp" });
+    assert.equal(r.source.name, "living-room-tv", "MAC input resolves to the client, not an IPv6 address");
+    assert.equal(r.verdict, "allowed");
+    assert.equal(r.decidingPolicy.name, "TV to HA");
+    r = await call("unifi_check_reachability", { from: "IoT VLAN", to: "NAS" });
+    assert.equal(r.source.subnet, "10.0.30.0/24");
+    assert.equal(r.verdict, "blocked");
+    assert.match(r.exceptions[0], /TV to HA.*allows.*ports 8123/);
+  } finally {
+    await call("unifi_delete_firewall_policy", { policyId: created.policy.id });
+  }
+
+  // Gateway address and the internet.
+  r = await call("unifi_check_reachability", { from: "NAS", to: "10.0.0.1" });
+  assert.equal(r.destination.zone, "Gateway");
+  assert.equal(r.verdict, "allowed");
+  r = await call("unifi_check_reachability", { from: "NAS", to: "example.org" });
+  assert.equal(r.destination.zone, "External");
+  assert.equal(r.destination.domain, "example.org");
+
+  // Same network: switched, not routed — unless Wi-Fi client isolation is on.
+  r = await call("unifi_check_reachability", { from: "Alex iPhone", to: "NAS" });
+  assert.equal(r.verdict, "allowed");
+  assert.match(r.reason, /switched locally/);
+  homeSsidIsolated = true;
+  try {
+    r = await call("unifi_check_reachability", { from: "Alex iPhone", to: "NAS" });
+    assert.equal(r.verdict, "blocked");
+    assert.match(r.reason, /client isolation.*Home/);
+  } finally {
+    homeSsidIsolated = false;
+  }
+
+  // Blocked clients cannot reach anything.
+  await call("unifi_block_client", { mac: "aa:bb:cc:dd:ee:03" });
+  try {
+    r = await call("unifi_check_reachability", { from: "NAS", to: "internet" });
+    assert.equal(r.verdict, "blocked");
+    assert.match(r.reason, /blocked from the network/);
+  } finally {
+    await call("unifi_unblock_client", { mac: "aa:bb:cc:dd:ee:03" });
+  }
+  await assert.rejects(call("unifi_check_reachability", { from: "NAS", to: "172.31.9.9" }), /not in any configured network/);
 });

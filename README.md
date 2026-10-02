@@ -27,7 +27,7 @@ Home and small-office networks keep growing: dozens of phones, TVs, cameras and 
 
 ```mermaid
 flowchart LR
-    A["AI client<br/>Claude Code, Claude Desktop,<br/>other MCP agents"] -- "tool call (MCP over stdio or HTTP)" --> S["UniFi MCP server<br/>35 tools · name→ID resolution<br/>policy builder · dry runs · audit log"]
+    A["AI client<br/>Claude Code, Claude Desktop,<br/>other MCP agents"] -- "tool call (MCP over stdio or HTTP)" --> S["UniFi MCP server<br/>36 tools · name→ID resolution<br/>policy builder · dry runs · audit log"]
     S -- result --> A
     S -- "API key" --> O["Official Network API<br/>/proxy/network/integration/v1"]
     S -- "API key or local login" --> I["Internal API<br/>/proxy/network/api/s/{site}"]
@@ -178,6 +178,7 @@ claude mcp add unifi \
 - `unifi_flow_statistics`: top clients, destinations, apps and blocking policies, and blocked/allowed counts by country and risk, per hour, day, week or month
 - `unifi_list_networks`, `unifi_list_wifi`
 - `unifi_list_firewall_zones`, `unifi_list_firewall_policies`, `unifi_get_firewall_policy`, `unifi_get_firewall_policy_order`
+- `unifi_check_reachability`: answer "can X reach Y?" for devices, IPs, networks, domains or the internet, by walking the zone pair's policies in order with schedules (including overnight windows), return-traffic rules, blocked clients, same-network traffic and Wi-Fi client isolation; reports the deciding policy, exceptions, and when scheduled rules would apply
 - `unifi_api_get`: read-only access to any other endpoint on the official, classic internal (`internal`) or newer internal (`internal-v2`) API, with paging, `fields` selection and `match` filtering for large lists. Paths with `.` or `..` segments are refused. A `body` turns it into a POST, allowed only for read-only query endpoints (`/stat/report/*`, `/traffic-flows`).
 
 **Write** (not registered when `UNIFI_READ_ONLY=true`)
@@ -199,6 +200,7 @@ Firewall tools accept **zone and network names** ("IoT", "External") as well as 
 - "What's our average internet bandwidth this week, and when was the busiest hour?"
 - "Which countries and ports is blocked inbound traffic coming from today?"
 - "Turn off internet for the kids' iPads until 6 AM."
+- "Can the guest network reach my NAS? And can my kid's phone reach the internet right now?"
 - "Block the device called *ESP_3A1F2C* and note it as unknown."
 - "Create a firewall policy so the IoT zone can't reach Internal, except my Home Assistant at 10.0.0.20 on port 8123. Show me a dry run first."
 - "Block inbound traffic from CN and RU to my port-forwarded services."
