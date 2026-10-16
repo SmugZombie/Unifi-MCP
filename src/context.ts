@@ -14,7 +14,7 @@ export interface Zone {
   id: string;
   name: string;
   networkIds: string[];
-  metadata?: { origin?: string };
+  metadata?: { origin?: string; configurable?: boolean };
 }
 
 export interface Network {

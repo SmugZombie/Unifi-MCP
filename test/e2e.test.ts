@@ -16,12 +16,12 @@ import { once } from "node:events";
 
 const SITE = "11111111-1111-1111-1111-111111111111";
 const zones = [
-  { id: "z-int", name: "Internal", networkIds: ["n-lan"], metadata: { origin: "SYSTEM_DEFINED" } },
-  { id: "z-ext", name: "External", networkIds: [], metadata: { origin: "SYSTEM_DEFINED" } },
+  { id: "z-int", name: "Internal", networkIds: ["n-lan", "n-lab"], metadata: { origin: "SYSTEM_DEFINED", configurable: true } },
+  { id: "z-ext", name: "External", networkIds: [], metadata: { origin: "SYSTEM_DEFINED", configurable: false } },
   { id: "z-iot", name: "IoT", networkIds: ["n-iot"], metadata: { origin: "USER_DEFINED" } },
   { id: "z-gw", name: "Gateway", networkIds: [], metadata: { origin: "SYSTEM_DEFINED" } },
 ];
-const networks = [{ id: "n-lan", name: "Default", zoneId: "z-int" }, { id: "n-iot", name: "IoT VLAN", vlanId: 30, zoneId: "z-iot" }];
+const networks = [{ id: "n-lan", name: "Default", zoneId: "z-int" }, { id: "n-iot", name: "IoT VLAN", vlanId: 30, zoneId: "z-iot" }, { id: "n-lab", name: "Lab", vlanId: 40, zoneId: "z-int" }];
 const networkconf = [
   { _id: "c1", name: "Default", purpose: "corporate", ip_subnet: "10.0.0.1/24" },
   { _id: "c2", name: "IoT VLAN", purpose: "corporate", ip_subnet: "10.0.30.1/24" },
@@ -163,7 +163,39 @@ const fake = createServer(async (req, res) => {
   const s = `/v1/sites/${SITE}`;
   if (ip === "/v1/info") return json(200, { applicationVersion: "10.6.106" });
   if (ip === "/v1/sites") return page([{ id: SITE, internalReference: "default", name: "Default" }]);
-  if (ip === `${s}/firewall/zones`) return page(zones);
+  if (ip === `${s}/firewall/zones` && req.method === "GET") return page(zones);
+  // Like the console: a network belongs to one zone, and networks left without one fall back to Internal.
+  const assign = (zoneId: string, networkIds: string[]) => {
+    for (const z of zones) z.networkIds = z.networkIds.filter((n) => !networkIds.includes(n));
+    zones.find((z) => z.id === zoneId)!.networkIds = networkIds;
+    const orphans = networks.map((n) => n.id).filter((n) => !zones.some((z) => z.networkIds.includes(n)));
+    zones.find((z) => z.id === "z-int")!.networkIds.push(...orphans);
+  };
+  if (ip === `${s}/firewall/zones` && req.method === "POST") {
+    const created = { id: `z-${b.name.toLowerCase().replace(/\W+/g, "-")}`, name: b.name, networkIds: [] as string[], metadata: { origin: "USER_DEFINED" } };
+    zones.push(created);
+    assign(created.id, b.networkIds);
+    policies.push(sys(`p-sys-${created.id}-int`, created.id, "z-int", "BLOCK"), sys(`p-sys-int-${created.id}`, "z-int", created.id, "BLOCK"));
+    return json(201, created);
+  }
+  const zm = ip.match(new RegExp(`^${s}/firewall/zones/([^/]+)$`));
+  if (zm) {
+    const i = zones.findIndex((z) => z.id === zm[1]);
+    if (i < 0) return json(404, { message: "not found" });
+    if (req.method === "PUT") {
+      zones[i].name = b.name;
+      assign(zones[i].id, b.networkIds);
+      return json(200, zones[i]);
+    }
+    if (req.method === "DELETE") {
+      const [gone] = zones.splice(i, 1);
+      zones.find((z) => z.id === "z-int")!.networkIds.push(...gone.networkIds);
+      for (let j = policies.length - 1; j >= 0; j--) {
+        if (policies[j].source.zoneId === gone.id || policies[j].destination.zoneId === gone.id) policies.splice(j, 1);
+      }
+      return json(200, {});
+    }
+  }
   if (ip === `${s}/networks`) return page(networks);
   if (ip === `${s}/devices`) return page([{ id: "d1", name: "UDM", state: "ONLINE", firmwareUpdatable: false }]);
   if (ip === `${s}/clients`) return page([{ id: "c1", name: "Alex iPhone" }]);
@@ -417,6 +449,42 @@ test("firewall policy lifecycle by zone/network names", async () => {
 
   const audit = readFileSync(auditLog, "utf8").trim().split("\n").map((l) => JSON.parse(l).action);
   assert.deepEqual(audit.slice(-4), ["create_firewall_policy", "update_firewall_policy", "set_firewall_policy_enabled", "delete_firewall_policy"]);
+});
+
+test("firewall zone lifecycle", async () => {
+  const before = JSON.stringify(zones);
+  const dry = await call("unifi_create_firewall_zone", { name: "Lab Zone", networks: ["Lab"], dryRun: true });
+  assert.deepEqual(dry.networksMoving, [{ network: "Lab", from: "Internal" }]);
+  assert.deepEqual(dry.request.body, { name: "Lab Zone", networkIds: ["n-lab"] });
+  assert.match(dry.warning, /BLOCK all traffic/);
+  assert.equal(JSON.stringify(zones), before, "dry run must not create");
+  await assert.rejects(call("unifi_create_firewall_zone", { name: "iot" }), /already exists/);
+
+  const created = await call("unifi_create_firewall_zone", { name: "Lab Zone", networks: ["Lab"] });
+  assert.deepEqual(created.zone.networks, ["Lab"]);
+  assert.deepEqual(created.systemPolicies.map((p: any) => `${p.from}>${p.to} ${p.action}`).sort(), ["Internal: any>Lab Zone: any BLOCK", "Lab Zone: any>Internal: any BLOCK"]);
+  // The zone list is re-read after a write, not served from the cache.
+  const listed = await call("unifi_list_firewall_zones");
+  assert.deepEqual(listed.find((z: any) => z.name === "Internal").networks, ["Default"]);
+
+  const upd = await call("unifi_update_firewall_zone", { zone: "Lab Zone", name: "Lab", networks: [] });
+  assert.deepEqual(upd.renamed, { from: "Lab Zone", to: "Lab" });
+  assert.deepEqual(upd.networksLeftNowIn, [{ network: "Lab", zone: "Internal" }]);
+  await call("unifi_update_firewall_zone", { zone: "z-lab-zone", networks: ["Lab"] });
+
+  await assert.rejects(call("unifi_update_firewall_zone", { zone: "Internal", name: "LAN" }), /cannot be renamed/);
+  await assert.rejects(call("unifi_update_firewall_zone", { zone: "External", networks: ["Lab"] }), /cannot be changed/);
+  await assert.rejects(call("unifi_delete_firewall_zone", { zone: "Gateway" }), /cannot be deleted/);
+
+  const delDry = await call("unifi_delete_firewall_zone", { zone: "z-lab-zone", dryRun: true });
+  assert.deepEqual(delDry.zone.networks, ["Lab"]);
+  const del = await call("unifi_delete_firewall_zone", { zone: "z-lab-zone" });
+  assert.deepEqual(del.networksNowIn, [{ network: "Lab", zone: "Internal" }]);
+  assert.deepEqual(del.restoreWith, { name: "Lab", networks: ["Lab"] });
+  assert.deepEqual(zones.map((z) => z.name), ["Internal", "External", "IoT", "Gateway"]);
+
+  const audit = readFileSync(auditLog, "utf8").trim().split("\n").map((l) => JSON.parse(l).action);
+  assert.deepEqual(audit.slice(-4), ["create_firewall_zone", "update_firewall_zone", "update_firewall_zone", "delete_firewall_zone"]);
 });
 
 test("unknown zone gives a helpful error", async () => {

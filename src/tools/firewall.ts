@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { defineTool, type UnifiContext } from "../context.js";
+import { defineTool, type UnifiContext, type Zone } from "../context.js";
 import {
   buildAction,
   buildEndpoint,
@@ -38,6 +38,12 @@ const connectionStatesSchema = z
   .optional()
   .describe("Match only these connection states (default: all)");
 const positionSchema = z.enum(["top", "bottom"]).optional().describe("Move the policy to the top or bottom of its zone pair's user-defined policies");
+
+const ZONE_EFFECTS =
+  "Networks assigned to the zone leave their current zone automatically. Observed on Network 10.6: the console adds system policies that " +
+  "BLOCK all traffic between a custom zone and Internal (and other custom zones) in both directions, and ALLOW it to External and Gateway. " +
+  "So moving a network into a custom zone immediately stops Internal from reaching it (e.g. controlling local devices from the main LAN) " +
+  "until an ALLOW policy is added. Use dryRun first and tell the user.";
 
 const POLICY_HELP =
   "Zone-based firewall: a policy matches traffic from a source zone to a destination zone (e.g. Internal → External, IoT → Internal). " +
@@ -98,6 +104,150 @@ export function registerFirewallTools(server: McpServer, ctx: UnifiContext): voi
     async () => {
       const [zones, l] = await Promise.all([ctx.zones(), ctx.lookups()]);
       return zones.map((z) => ({ id: z.id, name: z.name, origin: z.metadata?.origin, networks: z.networkIds.map(l.networkName) }));
+    },
+  );
+
+  async function getZone(key: string): Promise<Zone> {
+    const [zones, l] = await Promise.all([ctx.zones(), ctx.lookups()]);
+    const id = l.zoneId(key);
+    return zones.find((z) => z.id === id)!;
+  }
+
+  /** Networks that will join `zoneId`, with the zone each one leaves. */
+  async function networksJoining(zoneId: string | undefined, networkIds: string[]) {
+    const [zones, l] = await Promise.all([ctx.zones(), ctx.lookups()]);
+    return networkIds
+      .map((id) => ({ network: l.networkName(id), from: zones.find((z) => z.networkIds.includes(id)) }))
+      .filter((n) => n.from?.id !== zoneId)
+      .map((n) => ({ network: n.network, from: n.from?.name ?? "(none)" }));
+  }
+
+  /** Re-read zones after a write and report which zone each network ended up in. */
+  async function whereNetworksAre(networkIds: string[]) {
+    if (!networkIds.length) return undefined;
+    ctx.invalidate();
+    const [zones, l] = await Promise.all([ctx.zones(), ctx.lookups()]);
+    return networkIds.map((id) => ({ network: l.networkName(id), zone: zones.find((z) => z.networkIds.includes(id))?.name ?? "(none)" }));
+  }
+
+  async function describeZone(z: Zone) {
+    const l = await ctx.lookups();
+    return { id: z.id, name: z.name, origin: z.metadata?.origin, networks: z.networkIds.map(l.networkName) };
+  }
+
+  async function policiesUsingZone(zoneId: string) {
+    const l = await ctx.lookups();
+    return (await policies())
+      .filter((p) => p.source?.zoneId === zoneId || p.destination?.zoneId === zoneId)
+      .map((p) => summarizePolicy(p, l.zoneName, l.networkName));
+  }
+
+  defineTool(
+    server,
+    ctx,
+    "unifi_create_firewall_zone",
+    {
+      title: "Create firewall zone",
+      description: `Create a custom firewall zone, e.g. to separate an IoT or lab network from Internal. ${ZONE_EFFECTS}`,
+      input: {
+        name: z.string().min(1),
+        networks: z.array(z.string()).default([]).describe("Network names or IDs to move into the zone (see unifi_list_networks)"),
+        dryRun: z.boolean().default(false),
+      },
+      write: true,
+      destructive: true,
+    },
+    async ({ name, networks, dryRun }) => {
+      const [zones, l] = await Promise.all([ctx.zones(), ctx.lookups()]);
+      if (zones.some((z) => z.name.toLowerCase() === name.trim().toLowerCase())) throw new Error(`A zone named "${name}" already exists`);
+      const body = { name: name.trim(), networkIds: [...new Set(networks.map(l.networkId))] };
+      const moves = await networksJoining(undefined, body.networkIds);
+      if (dryRun) return { dryRun: true, networksMoving: moves, warning: ZONE_EFFECTS, request: { method: "POST", body } };
+
+      const created = await ctx.integration.siteRequest<Zone>("/firewall/zones", { method: "POST", body });
+      await ctx.audit("create_firewall_zone", { id: created.id, body });
+      ctx.invalidate();
+      const systemPolicies = (await policiesUsingZone(created.id)).filter((p: Json) => p.origin !== "USER_DEFINED");
+      return { ok: true, zone: await describeZone(created), networksMoved: moves, systemPolicies };
+    },
+  );
+
+  defineTool(
+    server,
+    ctx,
+    "unifi_update_firewall_zone",
+    {
+      title: "Update firewall zone",
+      description:
+        "Rename a custom firewall zone or change which networks belong to a zone. `networks` replaces the whole list. " +
+        "Built-in zones cannot be renamed, and only some (Internal, Hotspot, DMZ) accept network changes. " +
+        `Networks removed from a zone are reassigned by the console; the result shows where they went. ${ZONE_EFFECTS}`,
+      input: {
+        zone: z.string().describe("Zone name or ID"),
+        name: z.string().min(1).optional(),
+        networks: z.array(z.string()).optional().describe("Network names or IDs; replaces the zone's current list"),
+        dryRun: z.boolean().default(false),
+      },
+      write: true,
+      destructive: true,
+    },
+    async ({ zone, name, networks, dryRun }) => {
+      const existing = await getZone(zone);
+      const system = existing.metadata?.origin !== "USER_DEFINED";
+      if (system && name !== undefined && name !== existing.name) throw new Error(`"${existing.name}" is a built-in zone and cannot be renamed`);
+      if (system && networks !== undefined && existing.metadata?.configurable === false) {
+        throw new Error(`The networks of the built-in "${existing.name}" zone cannot be changed`);
+      }
+      const l = await ctx.lookups();
+      const body = { name: name?.trim() ?? existing.name, networkIds: networks ? [...new Set(networks.map(l.networkId))] : existing.networkIds };
+      const removed = existing.networkIds.filter((id) => !body.networkIds.includes(id));
+      const changes = {
+        ...(body.name !== existing.name ? { renamed: { from: existing.name, to: body.name } } : {}),
+        networksJoining: await networksJoining(existing.id, body.networkIds),
+        networksLeaving: removed.map(l.networkName),
+      };
+      if (dryRun) return { dryRun: true, before: await describeZone(existing), ...changes, warning: ZONE_EFFECTS, request: { method: "PUT", body } };
+
+      const updated = await ctx.integration.siteRequest<Zone>(`/firewall/zones/${existing.id}`, { method: "PUT", body });
+      await ctx.audit("update_firewall_zone", { id: existing.id, before: existing, after: body });
+      return { ok: true, zone: await describeZone(updated), ...changes, networksLeftNowIn: await whereNetworksAre(removed) };
+    },
+  );
+
+  defineTool(
+    server,
+    ctx,
+    "unifi_delete_firewall_zone",
+    {
+      title: "Delete firewall zone",
+      description:
+        "Delete a custom firewall zone (built-in zones cannot be deleted). Its networks are reassigned by the console; the result shows where they went. " +
+        "The dry run lists the policies that use the zone.",
+      input: { zone: z.string().describe("Zone name or ID"), dryRun: z.boolean().default(false) },
+      write: true,
+      destructive: true,
+    },
+    async ({ zone, dryRun }) => {
+      const existing = await getZone(zone);
+      if (existing.metadata?.origin !== "USER_DEFINED") throw new Error(`"${existing.name}" is a built-in zone and cannot be deleted`);
+      const using = await policiesUsingZone(existing.id);
+      const userPolicies = using.filter((p: Json) => p.origin === "USER_DEFINED");
+      if (dryRun) return { dryRun: true, zone: await describeZone(existing), userPoliciesUsingZone: userPolicies, request: { method: "DELETE" } };
+
+      const rawPolicies = (await policies()).filter(
+        (p) => p.metadata?.origin === "USER_DEFINED" && (p.source?.zoneId === existing.id || p.destination?.zoneId === existing.id),
+      );
+      await ctx.integration.siteRequest(`/firewall/zones/${existing.id}`, { method: "DELETE" });
+      // Keep the zone and its user policies in the audit log so both can be recreated.
+      await ctx.audit("delete_firewall_zone", { id: existing.id, deleted: existing, userPolicies: rawPolicies });
+      const l = await ctx.lookups();
+      return {
+        ok: true,
+        deleted: await describeZone(existing),
+        networksNowIn: await whereNetworksAre(existing.networkIds),
+        userPoliciesThatUsedZone: userPolicies,
+        restoreWith: { name: existing.name, networks: existing.networkIds.map(l.networkName) },
+      };
     },
   );
 
