@@ -50,7 +50,7 @@ function parsePorts(ports: (number | string)[]): Json {
     if (!/^\d+$/.test(s)) throw new Error(`Invalid port "${p}" (use 443 or 8000-8100)`);
     return { type: "PORT_NUMBER", value: Number(s) };
   });
-  return { type: "PORTS", items };
+  return { type: "PORTS", matchOpposite: false, items };
 }
 
 function parseIps(ips: string[]): Json {
@@ -163,18 +163,28 @@ export function resolveProtocol(protocol: Protocol | undefined, specs: (Endpoint
   return p;
 }
 
-export function buildAction(action: SimplePolicySpec["action"], allowReturnTraffic?: boolean): Json {
-  return action === "ALLOW" ? { type: "ALLOW", allowReturnTraffic: allowReturnTraffic ?? true } : { type: action };
+export function isGatewayZone(lookups: Lookups, zoneId: string): boolean {
+  try {
+    return lookups.zoneId("Gateway") === zoneId;
+  } catch {
+    return false;
+  }
+}
+
+// The console rejects allowReturnTraffic=true when the destination is the Gateway zone.
+export function buildAction(action: SimplePolicySpec["action"], allowReturnTraffic?: boolean, toGateway = false): Json {
+  return action === "ALLOW" ? { type: "ALLOW", allowReturnTraffic: allowReturnTraffic ?? !toGateway } : { type: action };
 }
 
 export function buildPolicy(spec: SimplePolicySpec, lookups: Lookups): Json {
   const protocol = resolveProtocol(spec.protocol, [spec.source, spec.destination]);
+  const destinationZoneId = lookups.zoneId(spec.destinationZone);
   const policy: Json = {
     name: spec.name,
     enabled: spec.enabled ?? true,
-    action: buildAction(spec.action, spec.allowReturnTraffic),
+    action: buildAction(spec.action, spec.allowReturnTraffic, isGatewayZone(lookups, destinationZoneId)),
     source: buildEndpoint("source", lookups.zoneId(spec.sourceZone), spec.source, lookups),
-    destination: buildEndpoint("destination", lookups.zoneId(spec.destinationZone), spec.destination, lookups),
+    destination: buildEndpoint("destination", destinationZoneId, spec.destination, lookups),
     ipProtocolScope: buildIpProtocolScope(protocol, spec.ipVersion),
     loggingEnabled: spec.logging ?? false,
   };
@@ -208,6 +218,7 @@ function describePorts(pf?: Json): string | undefined {
   if (!pf) return undefined;
   if (pf.type === "TRAFFIC_MATCHING_LIST") return `ports in list ${pf.trafficMatchingListId}`;
   return (
+    (pf.matchOpposite ? "not " : "") +
     "ports " +
     (pf.items ?? []).map((i: Json) => (i.type === "PORT_NUMBER_RANGE" ? `${i.start}-${i.stop}` : String(i.value))).join(",")
   );

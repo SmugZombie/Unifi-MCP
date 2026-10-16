@@ -129,12 +129,13 @@ function describePorts(pf: Json): string {
 function matchPorts(pf: Json | undefined, port: number | undefined, side: "source" | "destination"): Tri {
   if (!pf) return YES;
   if (pf.type === "TRAFFIC_MATCHING_LIST") return maybe(`${side} ports come from a traffic matching list`);
-  if (side === "source") return maybe(`only for source ports ${describePorts(pf)}`);
-  if (port === undefined) return maybe(`only for ports ${describePorts(pf)}`);
+  const not = pf.matchOpposite ? "other than " : "";
+  if (side === "source") return maybe(`only for source ports ${not}${describePorts(pf)}`);
+  if (port === undefined) return maybe(`only for ports ${not}${describePorts(pf)}`);
   const hit = (pf.items ?? []).some((i: Json) =>
     i.type === "PORT_NUMBER" ? i.value === port : i.type === "PORT_NUMBER_RANGE" ? port >= i.start && port <= i.stop : false,
   );
-  return hit ? YES : NO;
+  return hit !== Boolean(pf.matchOpposite) ? YES : NO;
 }
 
 export function matchSide(side: "source" | "destination", tf: Json | undefined, ep: Endpoint, q: TrafficQuery): Tri {

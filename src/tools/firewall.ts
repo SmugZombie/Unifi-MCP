@@ -7,6 +7,7 @@ import {
   buildIpProtocolScope,
   buildPolicy,
   deepMerge,
+  isGatewayZone,
   resolveProtocol,
   summarizePolicy,
   toWritable,
@@ -167,7 +168,7 @@ export function registerFirewallTools(server: McpServer, ctx: UnifiContext): voi
         name: z.string().optional(),
         description: z.string().optional(),
         action: actionSchema.optional(),
-        allowReturnTraffic: z.boolean().optional().describe("ALLOW only: also allow return traffic (default true)"),
+        allowReturnTraffic: z.boolean().optional().describe("ALLOW only: also allow return traffic (default true, except false when the destination is the Gateway zone, which rejects it)"),
         sourceZone: z.string().optional(),
         destinationZone: z.string().optional(),
         source: endpointSchema.optional(),
@@ -238,7 +239,7 @@ export function registerFirewallTools(server: McpServer, ctx: UnifiContext): voi
         description: z.string().optional(),
         enabled: z.boolean().optional(),
         action: actionSchema.optional(),
-        allowReturnTraffic: z.boolean().optional(),
+        allowReturnTraffic: z.boolean().optional().describe("ALLOW only: also allow return traffic (defaults to false when the destination is the Gateway zone)"),
         sourceZone: z.string().optional(),
         destinationZone: z.string().optional(),
         source: endpointSchema.optional(),
@@ -266,9 +267,6 @@ export function registerFirewallTools(server: McpServer, ctx: UnifiContext): voi
         if (args.connectionStates.length) body.connectionStateFilter = args.connectionStates;
         else delete body.connectionStateFilter;
       }
-      if (args.action !== undefined || args.allowReturnTraffic !== undefined) {
-        body.action = buildAction(args.action ?? body.action.type, args.allowReturnTraffic ?? body.action.allowReturnTraffic);
-      }
       if (args.sourceZone !== undefined || args.source !== undefined) {
         const zoneId = args.sourceZone ? l.zoneId(args.sourceZone) : body.source.zoneId;
         body.source = args.source ? buildEndpoint("source", zoneId, args.source as EndpointSpec, l) : { ...body.source, zoneId };
@@ -278,6 +276,12 @@ export function registerFirewallTools(server: McpServer, ctx: UnifiContext): voi
         body.destination = args.destination
           ? buildEndpoint("destination", zoneId, args.destination as EndpointSpec, l)
           : { ...body.destination, zoneId };
+      }
+      const toGateway = isGatewayZone(l, body.destination.zoneId);
+      const gatewayConflict = toGateway && body.action?.type === "ALLOW" && body.action.allowReturnTraffic;
+      if (args.action !== undefined || args.allowReturnTraffic !== undefined || gatewayConflict) {
+        const keep = toGateway ? undefined : body.action.allowReturnTraffic;
+        body.action = buildAction(args.action ?? body.action.type, args.allowReturnTraffic ?? keep, toGateway);
       }
       const portsUsed = [body.source, body.destination].some((side: Json) => Boolean(side?.trafficFilter?.portFilter));
       if (args.protocol !== undefined) {

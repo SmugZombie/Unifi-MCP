@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildPolicy, deepMerge, summarizePolicy, type Lookups } from "../src/firewall.ts";
+import { buildAction, buildPolicy, deepMerge, summarizePolicy, type Lookups } from "../src/firewall.ts";
 import { isReadOnlyQuery, pageResult } from "../src/tools/network.ts";
 import { pickGranularity } from "../src/tools/usage.ts";
 
 const lookups: Lookups = {
-  zoneId: (k) => ({ internal: "z-int", external: "z-ext", iot: "z-iot" })[k.toLowerCase()] ?? k,
+  zoneId: (k) => ({ internal: "z-int", external: "z-ext", iot: "z-iot", gateway: "z-gw" })[k.toLowerCase()] ?? k,
   networkId: (k) => ({ cameras: "n-cam" })[k.toLowerCase()] ?? k,
 };
 
@@ -34,16 +34,28 @@ test("ports default the protocol to TCP/UDP and parse ranges", () => {
     { type: "SUBNET", value: "10.0.1.0/24" },
     { type: "IP_ADDRESS_RANGE", start: "10.0.2.1", stop: "10.0.2.9" },
   ]);
-  assert.deepEqual(p.destination.trafficFilter.portFilter.items, [
-    { type: "PORT_NUMBER", value: 22 },
-    { type: "PORT_NUMBER_RANGE", start: 8000, stop: 8100 },
-  ]);
+  assert.deepEqual(p.destination.trafficFilter.portFilter, {
+    type: "PORTS",
+    matchOpposite: false,
+    items: [
+      { type: "PORT_NUMBER", value: 22 },
+      { type: "PORT_NUMBER_RANGE", start: 8000, stop: 8100 },
+    ],
+  });
 });
 
 test("ports only → PORT filter", () => {
   const p = buildPolicy({ name: "x", action: "REJECT", sourceZone: "iot", destinationZone: "external", destination: { ports: [53] }, protocol: "udp" }, lookups);
   assert.equal(p.destination.trafficFilter.type, "PORT");
   assert.equal(p.ipProtocolScope.protocolFilter.protocol.name, "UDP");
+});
+
+test("ALLOW into the Gateway zone defaults to no return traffic", () => {
+  const dns = { name: "IoT DNS", action: "ALLOW" as const, sourceZone: "IoT", destinationZone: "Gateway", destination: { ports: [53] } };
+  assert.deepEqual(buildPolicy(dns, lookups).action, { type: "ALLOW", allowReturnTraffic: false });
+  assert.deepEqual(buildPolicy({ ...dns, allowReturnTraffic: true }, lookups).action, { type: "ALLOW", allowReturnTraffic: true });
+  assert.deepEqual(buildPolicy({ ...dns, destinationZone: "Internal" }, lookups).action, { type: "ALLOW", allowReturnTraffic: true });
+  assert.deepEqual(buildAction("BLOCK", undefined, true), { type: "BLOCK" });
 });
 
 test("network filter with single source MAC", () => {
@@ -85,6 +97,8 @@ test("summarizePolicy is readable", () => {
   assert.equal(s.from, "ext: regions CN,RU");
   assert.equal(s.to, "int: ports 443");
   assert.equal(s.protocol, "TCP_UDP (IPV4_AND_IPV6)");
+  const inverted = { ...p, destination: { ...p.destination, trafficFilter: { type: "PORT", portFilter: { ...p.destination.trafficFilter.portFilter, matchOpposite: true } } } };
+  assert.equal(summarizePolicy(inverted, (id) => id.replace("z-", ""), (id) => id).to, "int: not ports 443");
 });
 
 test("pageResult shrinks oversized pages instead of cutting JSON", () => {

@@ -116,6 +116,11 @@ test("protocol and port matching, and 'depends' when nothing fully matches", () 
   assert.equal(vague.verdict, "allowed");
   assert.match(vague.exceptions[0], /No SSH.*only for ports 22.*only for TCP/);
 
+  const notWeb = policy({ index: 10000, name: "Only web", action: { type: "BLOCK" }, destination: { zoneId: INT, trafficFilter: { type: "PORT", portFilter: { type: "PORTS", matchOpposite: true, items: [{ type: "PORT_NUMBER", value: 443 }] } } } });
+  assert.equal(evaluatePolicies([notWeb, allowAll], peach, mario, q({ protocol: "tcp", port: 22 })).verdict, "blocked");
+  assert.equal(evaluatePolicies([notWeb, allowAll], peach, mario, q({ protocol: "tcp", port: 443 })).verdict, "allowed");
+  assert.match(evaluatePolicies([notWeb, allowAll], peach, mario, q()).exceptions[0], /only for ports other than 443/);
+
   const appOnly = policy({ index: 10000, name: "Block VPN apps", action: { type: "BLOCK" }, destination: { zoneId: EXT, trafficFilter: { type: "APPLICATION_CATEGORY", applicationCategoryFilter: { applicationCategoryIds: [11] } } } });
   const d = evaluatePolicies([appOnly], laptop, internet, q());
   assert.equal(d.verdict, "depends");
