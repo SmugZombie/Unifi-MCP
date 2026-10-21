@@ -115,6 +115,21 @@ export class UnifiContext {
     return this.cached("networks", () => this.integration.siteList<Network>("/networks"));
   }
 
+  /**
+   * WANs, VPN servers and site-to-site tunnels: zones list them as networks (External, Vpn) but they
+   * are not in /networks. Used only to name them; best effort.
+   */
+  zoneMembers(): Promise<{ id: string; name: string }[]> {
+    return this.cached("zoneMembers", async () => {
+      const lists = await Promise.all(
+        ["/wans", "/vpn/servers", "/vpn/site-to-site-tunnels"].map((path) =>
+          this.integration.siteList<{ id: string; name: string }>(path).catch(() => []),
+        ),
+      );
+      return lists.flat();
+    });
+  }
+
   private dpi?: Promise<{ apps: Map<number, string>; categories: Map<number, string> }>;
 
   /**
@@ -169,7 +184,7 @@ export class UnifiContext {
 
   /** Name/ID resolvers for zones and networks, so tools can accept "IoT" instead of a UUID. */
   async lookups(): Promise<Lookups & { zoneName(id: string): string; networkName(id: string): string }> {
-    const [zones, networks] = await Promise.all([this.zones(), this.networks()]);
+    const [zones, networks, members] = await Promise.all([this.zones(), this.networks(), this.zoneMembers()]);
     const resolve = (kind: string, items: { id: string; name: string }[], key: string) => {
       const k = key.trim().toLowerCase();
       const hit = items.find((i) => i.id === key) ?? items.find((i) => i.name.toLowerCase() === k);
@@ -183,7 +198,8 @@ export class UnifiContext {
       zoneId: (k) => resolve("zone", zones, k),
       networkId: (k) => resolve("network", networks, k),
       zoneName: name(zones),
-      networkName: name(networks),
+      // Names WANs and VPNs too, but only real networks can be used in policies and zones.
+      networkName: name([...networks, ...members]),
     };
   }
 

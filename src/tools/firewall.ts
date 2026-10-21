@@ -45,6 +45,17 @@ const ZONE_EFFECTS =
   "So moving a network into a custom zone immediately stops Internal from reaching it (e.g. controlling local devices from the main LAN) " +
   "until an ALLOW policy is added. Use dryRun first and tell the user.";
 
+/** Dry-run warning for networks joining `zone`; built-in zones keep their own policies. */
+function zoneWarning(zone: Zone | undefined, joining: unknown[]): string | undefined {
+  if (!joining.length) return undefined;
+  if (!zone || zone.metadata?.origin === "USER_DEFINED") return ZONE_EFFECTS;
+  return (
+    `Networks joining the built-in "${zone.name}" zone leave their current zone and get its existing policies instead, ` +
+    `which can change what they reach and what reaches them. Review them with unifi_list_firewall_policies(sourceZone="${zone.name}", ` +
+    `includeSystemDefined=true) and the same for destinationZone, or check specific paths with unifi_check_reachability.`
+  );
+}
+
 const POLICY_HELP =
   "Zone-based firewall: a policy matches traffic from a source zone to a destination zone (e.g. Internal → External, IoT → Internal). " +
   "Use unifi_list_firewall_zones to see zones. Zone and network names are accepted in place of IDs.";
@@ -209,7 +220,10 @@ export function registerFirewallTools(server: McpServer, ctx: UnifiContext): voi
         networksJoining: await networksJoining(existing.id, body.networkIds),
         networksLeaving: removed.map(l.networkName),
       };
-      if (dryRun) return { dryRun: true, before: await describeZone(existing), ...changes, warning: ZONE_EFFECTS, request: { method: "PUT", body } };
+      if (dryRun) {
+        const warning = zoneWarning(existing, changes.networksJoining);
+        return { dryRun: true, before: await describeZone(existing), ...changes, ...(warning ? { warning } : {}), request: { method: "PUT", body } };
+      }
 
       const updated = await ctx.integration.siteRequest<Zone>(`/firewall/zones/${existing.id}`, { method: "PUT", body });
       await ctx.audit("update_firewall_zone", { id: existing.id, before: existing, after: body });

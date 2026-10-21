@@ -17,7 +17,7 @@ import { once } from "node:events";
 const SITE = "11111111-1111-1111-1111-111111111111";
 const zones = [
   { id: "z-int", name: "Internal", networkIds: ["n-lan", "n-lab"], metadata: { origin: "SYSTEM_DEFINED", configurable: true } },
-  { id: "z-ext", name: "External", networkIds: [], metadata: { origin: "SYSTEM_DEFINED", configurable: false } },
+  { id: "z-ext", name: "External", networkIds: ["n-wan1"], metadata: { origin: "SYSTEM_DEFINED", configurable: false } },
   { id: "z-iot", name: "IoT", networkIds: ["n-iot"], metadata: { origin: "USER_DEFINED" } },
   { id: "z-gw", name: "Gateway", networkIds: [], metadata: { origin: "SYSTEM_DEFINED" } },
 ];
@@ -214,7 +214,8 @@ const fake = createServer(async (req, res) => {
   if (ip === `${s}/networks`) return page(networks);
   if (ip === `${s}/devices`) return page([{ id: "d1", name: "UDM", state: "ONLINE", firmwareUpdatable: false }]);
   if (ip === `${s}/clients`) return page([{ id: "c1", name: "Alex iPhone" }]);
-  if (ip === `${s}/wans`) return page([]);
+  if (ip === `${s}/wans`) return page([{ id: "n-wan1", name: "Internet 1" }]);
+  if (ip === `${s}/vpn/servers`) return page([{ id: "n-vpn", name: "Home VPN", type: "WIREGUARD" }]);
   if (ip === "/v1/dpi/applications") return page([{ id: (4 << 16) | 112, name: "Youtube" }, { id: 112, name: "Wrong app" }, { id: (1 << 16) | 2, name: "BitTorrent Series" }]);
   if (ip === "/v1/dpi/categories") return page([{ id: 4, name: "Media streaming services" }, { id: 1, name: "Peer-to-peer networks" }]);
   if (ip === `${s}/firewall/policies` && req.method === "GET") return page(policies);
@@ -483,7 +484,13 @@ test("firewall zone lifecycle", async () => {
   // The zone list is re-read after a write, not served from the cache.
   const listed = await call("unifi_list_firewall_zones");
   assert.deepEqual(listed.find((z: any) => z.name === "Internal").networks, ["Default"]);
+  assert.deepEqual(listed.find((z: any) => z.name === "External").networks, ["Internet 1"], "WANs are named");
 
+  const rename = await call("unifi_update_firewall_zone", { zone: "Lab Zone", name: "Lab", dryRun: true });
+  assert.equal(rename.warning, undefined, "no warning when no network moves");
+  const builtIn = await call("unifi_update_firewall_zone", { zone: "Internal", networks: ["Default", "Lab"], dryRun: true });
+  assert.match(builtIn.warning, /built-in "Internal" zone/);
+  assert.doesNotMatch(builtIn.warning, /BLOCK all traffic/);
   const upd = await call("unifi_update_firewall_zone", { zone: "Lab Zone", name: "Lab", networks: [] });
   assert.deepEqual(upd.renamed, { from: "Lab Zone", to: "Lab" });
   assert.deepEqual(upd.networksLeftNowIn, [{ network: "Lab", zone: "Internal" }]);
