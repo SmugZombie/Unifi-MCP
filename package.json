@@ -1,6 +1,6 @@
 {
   "name": "unifi-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server for UniFi Network: query devices and clients, manage zone-based firewall policies, block/unblock clients.",
   "type": "module",
   "bin": {

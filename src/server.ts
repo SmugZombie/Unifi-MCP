@@ -8,7 +8,7 @@ import { registerNetworkTools } from "./tools/network.js";
 import { registerReachabilityTools } from "./tools/reachability.js";
 import { registerUsageTools } from "./tools/usage.js";
 
-export const VERSION = "0.3.0";
+export const VERSION = "0.3.1";
 
 const INSTRUCTIONS = `Tools for a UniFi Network (10.x) home/office network: devices, clients, networks, zone-based firewall policies and client blocking.
 
