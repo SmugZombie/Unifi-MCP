@@ -1,10 +1,50 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { defineTool, type UnifiContext } from "../context.js";
 import type { Json } from "../firewall.js";
 
 const toMbps = (bytesPerSec: unknown) => (typeof bytesPerSec === "number" ? Math.round(((bytesPerSec * 8) / 1e6) * 100) / 100 : undefined);
 const iso = (unixSec: unknown) => (typeof unixSec === "number" && unixSec > 0 ? new Date(unixSec * 1000).toISOString() : undefined);
 const anyIfEmpty = (v: unknown) => (v === undefined || v === null || v === "" || v === "any" ? "any" : v);
+
+/** IP → device name from the controller's known clients (best effort). */
+async function namesByIp(ctx: UnifiContext): Promise<Map<string, string>> {
+  const known = await ctx.legacy.knownClients().catch(() => []);
+  const byIp = new Map<string, string>();
+  for (const c of known) {
+    const name = c.name || c.hostname;
+    if (!name) continue;
+    for (const ip of [c.fixed_ip, c.ip, c.last_ip]) if (ip && !byIp.has(ip)) byIp.set(ip, name);
+  }
+  return byIp;
+}
+
+function summarizePortForward(r: Json, byIp: Map<string, string>): Json {
+  return {
+    id: r._id,
+    name: r.name,
+    enabled: r.enabled,
+    protocol: r.proto,
+    wanPort: r.dst_port,
+    forwardTo: `${r.fwd}:${r.fwd_port || r.dst_port}`,
+    device: byIp.get(r.fwd),
+    wanInterface: r.pfwd_interface,
+    wanAddress: anyIfEmpty(r.destination_ip),
+    allowedSources: r.src_limiting_enabled ? anyIfEmpty(r.src) : "any",
+    logging: r.log || undefined,
+  };
+}
+
+/** Find a port forward by ID or name (exact, then a unique partial match). */
+export function findPortForward(rules: Json[], key: string): Json {
+  const k = key.trim().toLowerCase();
+  const hit = rules.find((r) => r._id === key) ?? rules.find((r) => String(r.name ?? "").toLowerCase() === k);
+  if (hit) return hit;
+  const partial = rules.filter((r) => String(r.name ?? "").toLowerCase().includes(k));
+  if (partial.length === 1) return partial[0];
+  const names = (partial.length ? partial : rules).map((r) => `"${r.name}"`).join(", ");
+  throw new Error(`${partial.length ? "Several" : "No"} port forwards match "${key}". ${partial.length ? "Matches" : "Known"}: ${names || "(none)"}`);
+}
 
 export function registerGatewayTools(server: McpServer, ctx: UnifiContext): void {
   defineTool(
@@ -19,33 +59,36 @@ export function registerGatewayTools(server: McpServer, ctx: UnifiContext): void
       input: {},
     },
     async () => {
-      const [rules, known] = await Promise.all([
-        ctx.legacy.request<Json>("/rest/portforward"),
-        ctx.legacy.knownClients().catch(() => []),
-      ]);
-      const byIp = new Map<string, string>();
-      for (const c of known) {
-        const name = c.name || c.hostname;
-        if (!name) continue;
-        for (const ip of [c.fixed_ip, c.ip, c.last_ip]) if (ip && !byIp.has(ip)) byIp.set(ip, name);
-      }
+      const [rules, byIp] = await Promise.all([ctx.legacy.request<Json>("/rest/portforward"), namesByIp(ctx)]);
       return {
         count: rules.length,
         enabled: rules.filter((r) => r.enabled).length,
-        rules: rules.map((r) => ({
-          id: r._id,
-          name: r.name,
-          enabled: r.enabled,
-          protocol: r.proto,
-          wanPort: r.dst_port,
-          forwardTo: `${r.fwd}:${r.fwd_port || r.dst_port}`,
-          device: byIp.get(r.fwd),
-          wanInterface: r.pfwd_interface,
-          wanAddress: anyIfEmpty(r.destination_ip),
-          allowedSources: r.src_limiting_enabled ? anyIfEmpty(r.src) : "any",
-          logging: r.log || undefined,
-        })),
+        rules: rules.map((r) => summarizePortForward(r, byIp)),
       };
+    },
+  );
+
+  defineTool(
+    server,
+    ctx,
+    "unifi_set_port_forward_enabled",
+    {
+      title: "Enable / disable port forward",
+      description:
+        "Turn a port-forwarding rule on or off without deleting it. UniFi creates and removes the matching system " +
+        '"Allow Port Forward …" firewall policy itself, so use this tool rather than trying to change that policy.',
+      input: { rule: z.string().describe("Port forward name or ID (see unifi_list_port_forwards)"), enabled: z.boolean() },
+      write: true,
+    },
+    async ({ rule, enabled }) => {
+      const existing = findPortForward(await ctx.legacy.request<Json>("/rest/portforward"), rule);
+      const byIp = await namesByIp(ctx);
+      if (existing.enabled === enabled) {
+        return { ok: true, unchanged: true, rule: summarizePortForward(existing, byIp) };
+      }
+      const [updated] = await ctx.legacy.request<Json>(`/rest/portforward/${existing._id}`, { method: "PUT", body: { ...existing, enabled } });
+      await ctx.audit("set_port_forward_enabled", { id: existing._id, name: existing.name, enabled });
+      return { ok: true, rule: summarizePortForward(updated ?? { ...existing, enabled }, byIp) };
     },
   );
 

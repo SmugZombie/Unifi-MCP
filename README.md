@@ -230,6 +230,7 @@ Notes:
 - `unifi_cancel_scheduled_action`: lift a timed block early, or keep it indefinitely
 - `unifi_create_firewall_policy`, `unifi_update_firewall_policy`, `unifi_set_firewall_policy_enabled`, `unifi_delete_firewall_policy`, `unifi_move_firewall_policy`
 - `unifi_create_firewall_zone`, `unifi_update_firewall_zone`, `unifi_delete_firewall_zone`: custom zones (e.g. move an IoT network out of Internal). Built-in zones can't be renamed or deleted. Moving a network into a custom zone makes the console add Block All Traffic policies to and from Internal, so the dry run warns about this, and the result lists the system policies created and where networks ended up
+- `unifi_set_port_forward_enabled`: turn a port forward on or off by name or ID (UniFi manages its "Allow Port Forward …" firewall policy itself)
 - `unifi_restart_device`, `unifi_power_cycle_port`
 
 Firewall tools accept **zone and network names** ("IoT", "External") as well as IDs. Common rules can be described with simple fields: IPs/CIDRs/ranges, networks, MACs, domains, countries, ports and protocol. For anything else (apps, schedules, traffic-matching lists), pass `rawPolicy` in the API's own schema. `dryRun: true` shows the exact request without sending it.

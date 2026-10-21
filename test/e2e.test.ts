@@ -28,6 +28,10 @@ const networkconf = [
   { _id: "c3", name: "Internet 1", purpose: "wan" },
 ];
 let homeSsidIsolated = false;
+const portForwards: any[] = [
+  { _id: "pf1", name: "NAS web", enabled: true, proto: "tcp", dst_port: "8443", fwd: "10.0.0.5", fwd_port: "443", pfwd_interface: "wan", src: "any", src_limiting_enabled: false, log: false },
+  { _id: "pf2", name: "Game", enabled: false, proto: "udp", dst_port: "3074", fwd: "10.0.0.99", fwd_port: "", pfwd_interface: "both", src: "203.0.113.0/24", src_limiting_enabled: true, destination_ip: "" },
+];
 const sys = (id: string, src: string, dst: string, action: string, extra: any = {}) => ({
   id, index: 2147483647, name: `${action === "BLOCK" ? "Block" : "Allow"} All Traffic`, enabled: true, action: { type: action },
   source: { zoneId: src }, destination: { zoneId: dst }, ipProtocolScope: { ipVersion: "IPV4_AND_IPV6" }, loggingEnabled: false,
@@ -97,11 +101,13 @@ const fake = createServer(async (req, res) => {
     if (sub === "/stat/sysinfo") return env([{ timezone: "America/Phoenix" }]);
     if (sub === "/rest/networkconf") return env(networkconf);
     if (sub === "/rest/wlanconf") return env([{ _id: "w1", name: "Home", l2_isolation: homeSsidIsolated }]);
-    if (sub === "/rest/portforward") {
-      return env([
-        { _id: "pf1", name: "NAS web", enabled: true, proto: "tcp", dst_port: "8443", fwd: "10.0.0.5", fwd_port: "443", pfwd_interface: "wan", src: "any", src_limiting_enabled: false, log: false },
-        { _id: "pf2", name: "Game", enabled: false, proto: "udp", dst_port: "3074", fwd: "10.0.0.99", fwd_port: "", pfwd_interface: "both", src: "203.0.113.0/24", src_limiting_enabled: true, destination_ip: "" },
-      ]);
+    if (sub === "/rest/portforward") return env(portForwards);
+    const pfm = sub.match(/^\/rest\/portforward\/([^/]+)$/);
+    if (pfm && req.method === "PUT") {
+      const i = portForwards.findIndex((r) => r._id === pfm[1]);
+      if (i < 0) return json(400, { meta: { rc: "error", msg: "api.err.IdInvalid" } });
+      portForwards[i] = { ...b, _id: portForwards[i]._id };
+      return env([portForwards[i]]);
     }
     if (sub === "/stat/health") {
       return env([
@@ -565,6 +571,15 @@ test("port forwards and WAN health", async () => {
   assert.deepEqual(pf.rules[0], { id: "pf1", name: "NAS web", enabled: true, protocol: "tcp", wanPort: "8443", forwardTo: "10.0.0.5:443", device: "NAS", wanInterface: "wan", wanAddress: "any", allowedSources: "any" });
   assert.equal(pf.rules[1].forwardTo, "10.0.0.99:3074", "empty fwd_port means same as WAN port");
   assert.equal(pf.rules[1].allowedSources, "203.0.113.0/24");
+
+  const off = await call("unifi_set_port_forward_enabled", { rule: "nas", enabled: false });
+  assert.equal(off.rule.enabled, false);
+  assert.equal(portForwards[0].enabled, false);
+  assert.equal(portForwards[0].fwd_port, "443", "other fields are kept");
+  assert.equal((await call("unifi_set_port_forward_enabled", { rule: "pf2", enabled: false })).unchanged, true);
+  await assert.rejects(call("unifi_set_port_forward_enabled", { rule: "Plex", enabled: false }), /No port forwards match "Plex". Known: "NAS web", "Game"/);
+  await call("unifi_set_port_forward_enabled", { rule: "NAS web", enabled: true });
+  assert.equal(portForwards[0].enabled, true);
 
   const h = await call("unifi_wan_health");
   assert.equal(h.isp.name, "Example ISP");
